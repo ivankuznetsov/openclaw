@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TailscaleServeRouteObservation } from "../shared/tailscale-status.js";
 import {
   TAILSCALE_PAIRING_CHECK_ID,
   collectTailscalePairingConfigurationFindings,
+  collectTailscalePairingHealthFindings,
 } from "./doctor-tailscale-pairing.js";
 
 const externalRoute: TailscaleServeRouteObservation = {
@@ -184,5 +185,193 @@ describe("doctor Tailscale pairing preflight configuration", () => {
       expect.objectContaining({ severity: "warning", requirement: "serve-route-present" }),
     ]);
     expect(JSON.stringify(result)).not.toContain("9999");
+  });
+});
+
+describe("doctor Tailscale pairing preflight runtime evidence", () => {
+  const cfg = {
+    gateway: {
+      bind: "loopback",
+      tailscale: { mode: "off" },
+      trustedProxies: ["127.0.0.1"],
+    },
+    plugins: {
+      entries: {
+        "device-pair": { config: { publicUrl: "wss://node.tail.ts.net:18789" } },
+      },
+    },
+  } as OpenClawConfig;
+
+  function serveRunner() {
+    return vi.fn().mockResolvedValue({
+      code: 0,
+      stdout: JSON.stringify({
+        TCP: { "18789": { HTTPS: true } },
+        Web: {
+          "node.tail.ts.net:18789": {
+            Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
+          },
+        },
+      }),
+    });
+  }
+
+  it("keeps HTTP liveness separate from a WebSocket attribution failure", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, status: "live" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const probe = vi.fn().mockResolvedValue({
+      ok: false,
+      gatewayReached: true,
+      url: "wss://node.tail.ts.net:18789",
+      connectLatencyMs: 15,
+      error: "gateway closed (1008): proxy_attribution_required",
+      close: { code: 1008, reason: "proxy_attribution_required" },
+      auth: { role: null, scopes: [], capability: "unknown" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+
+    const result = await collectTailscalePairingHealthFindings({
+      cfg,
+      env: {},
+      runCommandWithTimeout: serveRunner(),
+      fetchFn,
+      probeGateway: probe,
+    });
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ severity: "info", requirement: "http-liveness" }),
+        expect.objectContaining({ severity: "error", requirement: "proxy-attribution-runtime" }),
+      ]),
+    );
+    expect(fetchFn).toHaveBeenCalledWith(
+      "https://node.tail.ts.net:18789/healthz",
+      expect.objectContaining({ method: "GET", redirect: "manual" }),
+    );
+    expect(probe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "wss://node.tail.ts.net:18789",
+        includeDetails: false,
+        detailLevel: "none",
+        suppressStoredDeviceAuth: true,
+        auth: undefined,
+        signal: expect.any(AbortSignal),
+      }),
+    );
+  });
+
+  it("reports a correlated unauthenticated Gateway response as auth unverified", async () => {
+    const result = await collectTailscalePairingHealthFindings({
+      cfg,
+      env: {},
+      runCommandWithTimeout: serveRunner(),
+      fetchFn: vi.fn().mockResolvedValue(new Response("not the Gateway", { status: 200 })),
+      probeGateway: vi.fn().mockResolvedValue({
+        ok: false,
+        gatewayReached: true,
+        url: "wss://node.tail.ts.net:18789",
+        connectLatencyMs: 10,
+        error: "gateway closed (1008): unauthorized",
+        close: { code: 1008, reason: "unauthorized" },
+        auth: { role: null, scopes: [], capability: "unknown" },
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+      }),
+    });
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ severity: "warning", requirement: "http-liveness-unverified" }),
+        expect.objectContaining({
+          severity: "warning",
+          requirement: "gateway-auth-unverified",
+        }),
+      ]),
+    );
+  });
+
+  it("reports authenticated readiness only from a successful Gateway probe", async () => {
+    const result = await collectTailscalePairingHealthFindings({
+      cfg,
+      env: {},
+      runCommandWithTimeout: serveRunner(),
+      fetchFn: vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ ok: true, status: "live" }), { status: 200 }),
+        ),
+      probeGateway: vi.fn().mockResolvedValue({
+        ok: true,
+        gatewayReached: true,
+        url: "wss://node.tail.ts.net:18789",
+        connectLatencyMs: 10,
+        error: null,
+        close: null,
+        auth: { role: "operator", scopes: ["operator.read"], capability: "read_only" },
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+      }),
+    });
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ severity: "info", requirement: "gateway-authenticated" }),
+      ]),
+    );
+  });
+
+  it("uses one outer deadline and returns a bounded unknown result", async () => {
+    const probe = vi.fn(
+      async (options: { signal?: AbortSignal }) =>
+        await new Promise((resolve) => {
+          options.signal?.addEventListener(
+            "abort",
+            () =>
+              resolve({
+                ok: false,
+                url: "wss://node.tail.ts.net:18789",
+                connectLatencyMs: null,
+                error: "aborted",
+                close: null,
+                auth: { role: null, scopes: [], capability: "unknown" },
+                health: null,
+                status: null,
+                presence: null,
+                configSnapshot: null,
+              }),
+            { once: true },
+          );
+        }),
+    );
+
+    const result = await collectTailscalePairingHealthFindings({
+      cfg,
+      env: {},
+      timeoutMs: 10,
+      runCommandWithTimeout: serveRunner(),
+      fetchFn: vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ ok: true, status: "live" }), { status: 200 }),
+        ),
+      probeGateway: probe,
+    });
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ severity: "warning", requirement: "diagnostic-deadline" }),
+      ]),
+    );
   });
 });

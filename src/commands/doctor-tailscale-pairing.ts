@@ -1,13 +1,26 @@
 // Read-only Tailscale pairing preflight findings.
+import os from "node:os";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { resolveGatewayPort } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { isTrustedProxyAddress } from "../gateway/net.js";
 import { checkBrowserOrigin } from "../gateway/origin-check.js";
-import { validateMobilePairingUrl, type resolvePairingGatewayUrl } from "../pairing/setup-code.js";
-import type {
-  TailscaleServeRouteObservation,
+import { probeGateway as probeGatewayEndpoint } from "../gateway/probe.js";
+import {
+  resolveConfiguredPairingPublicUrl,
+  resolvePairingGatewayUrl,
+  validateMobilePairingUrl,
+} from "../pairing/setup-code.js";
+import { runUtf8CommandWithTimeout } from "../process/exec.js";
+import {
   inspectTailscaleServeRoutesWithRunner,
+  type TailscaleStatusCommandRunner,
+  TailscaleServeRouteObservation,
 } from "../shared/tailscale-status.js";
+import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 
 export const TAILSCALE_PAIRING_CHECK_ID = "core/doctor/tailscale-pairing";
 
@@ -264,4 +277,219 @@ export function collectTailscalePairingConfigurationFindings(
   }
 
   return findings;
+}
+
+type CollectTailscalePairingHealthParams = {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  runCommandWithTimeout?: TailscaleStatusCommandRunner;
+  networkInterfaces?: () => ReturnType<typeof os.networkInterfaces>;
+  fetchFn?: typeof fetch;
+  probeGateway?: typeof probeGatewayEndpoint;
+};
+
+function healthUrlForPairingEndpoint(url: URL): string {
+  const protocol = url.protocol === "wss:" ? "https:" : "http:";
+  const basePath = url.pathname === "/" ? "" : url.pathname.replace(/\/$/, "");
+  return `${protocol}//${url.host}${basePath}/healthz`;
+}
+
+async function probeHttpLiveness(params: {
+  url: URL;
+  signal?: AbortSignal;
+  fetchFn: typeof fetch;
+}): Promise<"live" | "unverified"> {
+  try {
+    const response = await params.fetchFn(healthUrlForPairingEndpoint(params.url), {
+      method: "GET",
+      redirect: "manual",
+      headers: { accept: "application/json" },
+      signal: params.signal,
+    });
+    if (response.status !== 200) {
+      return "unverified";
+    }
+    const body = (await response.json()) as { ok?: unknown; status?: unknown };
+    return body.ok === true && body.status === "live" ? "live" : "unverified";
+  } catch {
+    return "unverified";
+  }
+}
+
+function sanitizeProbeReason(value: string | null | undefined): string | undefined {
+  const cleaned = value ? redactSensitiveUrlLikeString(sanitizeTerminalText(value)).trim() : "";
+  return cleaned ? truncateUtf16Safe(cleaned, 240) : undefined;
+}
+
+function runtimeEvidenceFindings(params: {
+  url: URL;
+  liveness: "live" | "unverified";
+  probe: Awaited<ReturnType<typeof probeGatewayEndpoint>>;
+}): HealthFinding[] {
+  const target = pairingTarget(params.url);
+  const findings: HealthFinding[] = [
+    params.liveness === "live"
+      ? {
+          checkId: TAILSCALE_PAIRING_CHECK_ID,
+          severity: "info",
+          message:
+            "The configured endpoint returned the Gateway HTTP liveness contract; this does not prove WebSocket authentication or phone reachability.",
+          target,
+          requirement: "http-liveness",
+        }
+      : {
+          checkId: TAILSCALE_PAIRING_CHECK_ID,
+          severity: "warning",
+          message:
+            "The configured endpoint did not return the expected Gateway HTTP liveness contract; HTTP liveness is unverified.",
+          target,
+          requirement: "http-liveness-unverified",
+          fixHint:
+            "Check the exact published path and `/healthz` response without relying on status 200 alone.",
+        },
+  ];
+
+  const reason = sanitizeProbeReason(params.probe.close?.reason ?? params.probe.error);
+  if (
+    reason?.includes("proxy_attribution_required") ||
+    params.probe.error?.includes("proxy_attribution_required")
+  ) {
+    findings.push({
+      checkId: TAILSCALE_PAIRING_CHECK_ID,
+      severity: "error",
+      message:
+        "The Gateway rejected the WebSocket upgrade because the immediate proxy could not be attributed, regardless of HTTP liveness.",
+      path: "gateway.trustedProxies",
+      target,
+      requirement: "proxy-attribution-runtime",
+      fixHint:
+        "Trust only the immediate proxy address and make that proxy overwrite or safely rebuild forwarded client headers.",
+    });
+    return findings;
+  }
+
+  const authenticated =
+    params.probe.ok &&
+    (params.probe.auth.role !== null ||
+      params.probe.auth.scopes.length > 0 ||
+      ["read_only", "write_capable", "admin_capable"].includes(params.probe.auth.capability));
+  if (authenticated) {
+    findings.push({
+      checkId: TAILSCALE_PAIRING_CHECK_ID,
+      severity: "info",
+      message:
+        "The configured endpoint completed an authenticated read-only Gateway probe from this host; phone tailnet access still requires separate verification.",
+      target,
+      requirement: "gateway-authenticated",
+    });
+  } else if (params.probe.gatewayReached === true) {
+    findings.push({
+      checkId: TAILSCALE_PAIRING_CHECK_ID,
+      severity: "warning",
+      message: `The endpoint returned a correlated Gateway response, but authentication was not verified${reason ? ` (${reason})` : ""}.`,
+      target,
+      requirement: "gateway-auth-unverified",
+      fixHint:
+        "Verify normal Gateway authentication and device approval; this diagnostic does not create pairing requests.",
+    });
+  } else {
+    findings.push({
+      checkId: TAILSCALE_PAIRING_CHECK_ID,
+      severity: "warning",
+      message: `No correlated Gateway WebSocket response was observed${reason ? ` (${reason})` : ""}.`,
+      target,
+      requirement: "gateway-unreachable",
+      fixHint: "Check Tailscale connectivity, the published route, TLS, and the Gateway listener.",
+    });
+  }
+  return findings;
+}
+
+function deadlineFinding(url: URL): HealthFinding {
+  return {
+    checkId: TAILSCALE_PAIRING_CHECK_ID,
+    severity: "warning",
+    message: "The Tailscale pairing diagnostic reached its overall deadline.",
+    target: pairingTarget(url),
+    requirement: "diagnostic-deadline",
+    fixHint: "Run the focused check again after confirming the Tailscale CLI and endpoint respond.",
+  };
+}
+
+/** Runs the opt-in, read-only Tailscale pairing preflight under one deadline. */
+export async function collectTailscalePairingHealthFindings(
+  params: CollectTailscalePairingHealthParams,
+): Promise<readonly HealthFinding[]> {
+  const env = params.env ?? process.env;
+  const timeoutMs = params.timeoutMs ?? 10_000;
+  const { signal, cleanup } = buildTimeoutAbortSignal({
+    timeoutMs,
+    operation: "doctor-tailscale-pairing",
+  });
+  const runCommandWithTimeout: TailscaleStatusCommandRunner =
+    params.runCommandWithTimeout ??
+    ((argv, options) =>
+      runUtf8CommandWithTimeout(argv, {
+        ...options,
+        signal,
+        maxOutputBytes: 400_000,
+      }));
+
+  try {
+    const pairingUrl = await resolvePairingGatewayUrl(params.cfg, {
+      env,
+      publicUrl: resolveConfiguredPairingPublicUrl(params.cfg),
+      runCommandWithTimeout,
+      networkInterfaces: params.networkInterfaces ?? os.networkInterfaces,
+    });
+    const serveInspection = await inspectTailscaleServeRoutesWithRunner(runCommandWithTimeout);
+    const findings = [
+      ...collectTailscalePairingConfigurationFindings({
+        cfg: params.cfg,
+        gatewayPort: resolveGatewayPort(params.cfg, env),
+        pairingUrl,
+        serveInspection,
+      }),
+    ];
+    const url = parsePairingUrl(pairingUrl.url);
+    if (!url || validateMobilePairingUrl(pairingTarget(url), pairingUrl.source)) {
+      return findings;
+    }
+    if (signal?.aborted) {
+      findings.push(deadlineFinding(url));
+      return findings;
+    }
+
+    const liveness = await probeHttpLiveness({
+      url,
+      signal,
+      fetchFn: params.fetchFn ?? fetch,
+    });
+    const remoteTlsFingerprint =
+      pairingUrl.source === "gateway.remote.url"
+        ? params.cfg.gateway?.remote?.tlsFingerprint
+        : undefined;
+    const probe = await (params.probeGateway ?? probeGatewayEndpoint)({
+      url: pairingTarget(url),
+      timeoutMs,
+      includeDetails: false,
+      detailLevel: "none",
+      suppressStoredDeviceAuth: true,
+      auth: undefined,
+      config: remoteTlsFingerprint
+        ? { gateway: { remote: { url: pairingTarget(url), tlsFingerprint: remoteTlsFingerprint } } }
+        : {},
+      env,
+      signal,
+    });
+    if (signal?.aborted) {
+      findings.push(deadlineFinding(url));
+      return findings;
+    }
+    findings.push(...runtimeEvidenceFindings({ url, liveness, probe }));
+    return findings;
+  } finally {
+    cleanup();
+  }
 }
