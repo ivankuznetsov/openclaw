@@ -309,4 +309,27 @@ describe("shared/tailscale-status", () => {
     });
     await expect(resolveTailscaleServeGatewayUrlsWithRunner(18789, malformed)).resolves.toEqual([]);
   });
+
+  it("keeps searching command candidates after a valid empty Serve status", async () => {
+    const run = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 0, stdout: "{}" })
+      .mockResolvedValueOnce({
+        code: 0,
+        stdout: JSON.stringify({
+          TCP: { "443": { HTTPS: true } },
+          Web: {
+            "backup.tail.ts.net:443": {
+              Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
+            },
+          },
+        }),
+      });
+
+    await expect(inspectTailscaleServeGatewayUrlsWithRunner(18789, run)).resolves.toEqual({
+      status: "ok",
+      urls: ["wss://backup.tail.ts.net"],
+    });
+    expect(run).toHaveBeenCalledTimes(2);
+  });
 });

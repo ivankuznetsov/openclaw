@@ -76,16 +76,20 @@ function sanitizeTailscaleRouteTarget(value: string | undefined): string | null 
   return sanitized ? redactSensitiveUrlLikeString(sanitized) : null;
 }
 
+function parsePossiblyNoisyStatus<T>(raw: string, schema: z.ZodType<T>): T | null {
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start === -1 || end <= start) {
+    return null;
+  }
+  return safeParseJsonWithSchema(schema, raw.slice(start, end + 1));
+}
+
 /** Parses all observable HTTPS Serve routes without making an ownership decision. */
 export function extractTailscaleServeRouteObservations(
   raw: string,
 ): TailscaleServeRouteObservation[] | null {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  const status =
-    end > start && start >= 0
-      ? safeParseJsonWithSchema(TailscaleServeStatusSchema, raw.slice(start, end + 1))
-      : null;
+  const status = parsePossiblyNoisyStatus(raw, TailscaleServeStatusSchema);
   if (!status) {
     return null;
   }
@@ -139,17 +143,8 @@ export function extractTailscaleServeRouteObservations(
   );
 }
 
-function parsePossiblyNoisyStatus(raw: string): z.infer<typeof TailscaleStatusSchema> | null {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  if (start === -1 || end <= start) {
-    return null;
-  }
-  return safeParseJsonWithSchema(TailscaleStatusSchema, raw.slice(start, end + 1));
-}
-
 function extractTailnetHostFromStatusJson(raw: string): string | null {
-  const parsed = parsePossiblyNoisyStatus(raw);
+  const parsed = parsePossiblyNoisyStatus(raw, TailscaleStatusSchema);
   const dns = parsed?.Self?.DNSName;
   if (dns && dns.length > 0) {
     return dns.replace(/\.$/, "");
@@ -188,12 +183,7 @@ export function extractTailscaleServeGatewayUrls(
   gatewayPort: number,
   forAdoption = false,
 ): string[] | null {
-  const start = raw.indexOf("{");
-  const end = raw.lastIndexOf("}");
-  const config =
-    end > start && start >= 0
-      ? safeParseJsonWithSchema(TailscaleServeConfigSchema, raw.slice(start, end + 1))
-      : null;
+  const config = parsePossiblyNoisyStatus(raw, TailscaleServeConfigSchema);
   if (!config) {
     return null;
   }
@@ -235,11 +225,13 @@ type TailscaleServeGatewayInspection =
 async function inspectTailscaleServeStatusWithRunner<T>(
   runCommandWithTimeout: TailscaleStatusCommandRunner | undefined,
   parse: (raw: string) => T | null,
+  isPreferred: (value: T) => boolean,
 ): Promise<{ status: "ok"; value: T } | { status: "unavailable" } | { status: "invalid" }> {
   if (!runCommandWithTimeout) {
     return { status: "unavailable" };
   }
   let sawInvalidStatus = false;
+  let fallback: { value: T } | undefined;
   for (const candidate of TAILSCALE_STATUS_COMMAND_CANDIDATES) {
     try {
       const result = await runCommandWithTimeout([candidate, "serve", "status", "--json"], {
@@ -250,12 +242,19 @@ async function inspectTailscaleServeStatusWithRunner<T>(
       }
       const value = parse(result.stdout);
       if (value !== null) {
-        return { status: "ok", value };
+        if (isPreferred(value)) {
+          return { status: "ok", value };
+        }
+        fallback ??= { value };
+        continue;
       }
       sawInvalidStatus = true;
     } catch {
       continue;
     }
+  }
+  if (fallback) {
+    return { status: "ok", value: fallback.value };
   }
   return { status: sawInvalidStatus ? "invalid" : "unavailable" };
 }
@@ -267,6 +266,7 @@ export async function inspectTailscaleServeRoutesWithRunner(
   const inspection = await inspectTailscaleServeStatusWithRunner(
     runCommandWithTimeout,
     extractTailscaleServeRouteObservations,
+    (routes) => routes.length > 0,
   );
   return inspection.status === "ok" ? { status: "ok", routes: inspection.value } : inspection;
 }
@@ -277,8 +277,10 @@ export async function inspectTailscaleServeGatewayUrlsWithRunner(
   runCommandWithTimeout?: TailscaleStatusCommandRunner,
   forAdoption = false,
 ): Promise<TailscaleServeGatewayInspection> {
-  const inspection = await inspectTailscaleServeStatusWithRunner(runCommandWithTimeout, (raw) =>
-    extractTailscaleServeGatewayUrls(raw, gatewayPort, forAdoption),
+  const inspection = await inspectTailscaleServeStatusWithRunner(
+    runCommandWithTimeout,
+    (raw) => extractTailscaleServeGatewayUrls(raw, gatewayPort, forAdoption),
+    (urls) => urls.length > 0,
   );
   return inspection.status === "ok" ? { status: "ok", urls: inspection.value } : inspection;
 }

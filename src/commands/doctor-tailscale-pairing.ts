@@ -9,6 +9,7 @@ import type { HealthFinding } from "../flows/health-checks.js";
 import { isTrustedProxyAddress } from "../gateway/net.js";
 import { checkBrowserOrigin } from "../gateway/origin-check.js";
 import { probeGateway as probeGatewayEndpoint } from "../gateway/probe.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import {
   resolveConfiguredPairingPublicUrl,
   resolvePairingGatewayUrl,
@@ -414,32 +415,6 @@ function deadlineFinding(url: URL | null): HealthFinding {
   };
 }
 
-function awaitWithAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return operation;
-  }
-  if (signal.aborted) {
-    return Promise.reject(signal.reason);
-  }
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () => {
-      signal.removeEventListener("abort", onAbort);
-      reject(signal.reason);
-    };
-    signal.addEventListener("abort", onAbort, { once: true });
-    operation.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error);
-      },
-    );
-  });
-}
-
 /** Runs the opt-in, read-only Tailscale pairing preflight under one deadline. */
 export async function collectTailscalePairingHealthFindings(
   params: CollectTailscalePairingHealthParams,
@@ -462,17 +437,16 @@ export async function collectTailscalePairingHealthFindings(
   let url: URL | null = null;
 
   try {
-    const pairingUrl = await awaitWithAbort(
-      resolvePairingGatewayUrl(params.cfg, {
-        env,
-        publicUrl: resolveConfiguredPairingPublicUrl(params.cfg),
-        runCommandWithTimeout,
-        networkInterfaces: params.networkInterfaces ?? os.networkInterfaces,
-      }),
-      signal,
-    );
-    const serveInspection = await awaitWithAbort(
-      inspectTailscaleServeRoutesWithRunner(runCommandWithTimeout),
+    const [pairingUrl, serveInspection] = await racePromiseWithAbortSignal(
+      Promise.all([
+        resolvePairingGatewayUrl(params.cfg, {
+          env,
+          publicUrl: resolveConfiguredPairingPublicUrl(params.cfg),
+          runCommandWithTimeout,
+          networkInterfaces: params.networkInterfaces ?? os.networkInterfaces,
+        }),
+        inspectTailscaleServeRoutesWithRunner(runCommandWithTimeout),
+      ]),
       signal,
     );
     findings.push(
@@ -488,36 +462,35 @@ export async function collectTailscalePairingHealthFindings(
       return findings;
     }
 
-    const liveness = await awaitWithAbort(
-      probeHttpLiveness({
-        url,
-        signal,
-        fetchFn: params.fetchFn ?? fetch,
-      }),
-      signal,
-    );
     const remoteTlsFingerprint =
       pairingUrl.source === "gateway.remote.url"
         ? params.cfg.gateway?.remote?.tlsFingerprint
         : undefined;
-    const probe = await awaitWithAbort(
-      (params.probeGateway ?? probeGatewayEndpoint)({
-        url: pairingTarget(url),
-        timeoutMs,
-        includeDetails: false,
-        detailLevel: "none",
-        suppressStoredDeviceAuth: true,
-        auth: undefined,
-        config: remoteTlsFingerprint
-          ? {
-              gateway: {
-                remote: { url: pairingTarget(url), tlsFingerprint: remoteTlsFingerprint },
-              },
-            }
-          : {},
-        env,
-        signal,
-      }),
+    const [liveness, probe] = await racePromiseWithAbortSignal(
+      Promise.all([
+        probeHttpLiveness({
+          url,
+          signal,
+          fetchFn: params.fetchFn ?? fetch,
+        }),
+        (params.probeGateway ?? probeGatewayEndpoint)({
+          url: pairingTarget(url),
+          timeoutMs,
+          includeDetails: false,
+          detailLevel: "none",
+          suppressStoredDeviceAuth: true,
+          auth: undefined,
+          config: remoteTlsFingerprint
+            ? {
+                gateway: {
+                  remote: { url: pairingTarget(url), tlsFingerprint: remoteTlsFingerprint },
+                },
+              }
+            : {},
+          env,
+          signal,
+        }),
+      ]),
       signal,
     );
     findings.push(...runtimeEvidenceFindings({ url, liveness, probe }));
