@@ -139,20 +139,25 @@ struct DashboardCloseShortcutTests {
     }
 
     private func pressCommandW(in window: NSWindow, baseCharacter: String = "w") throws {
+        // The accessory test runner has no app event loop to establish a key window.
+        // Give its Close menu the same target AppKit resolves in the running app.
+        let close = try #require(NSApp.mainMenu?.item(withTitle: "File")?.submenu?.item(withTitle: "Close Window"))
+        close.target = window
         let event = try #require(NSEvent.keyEvent(
-            with: .keyDown, location: .zero, modifierFlags: .command,
-            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: window.windowNumber,
-            context: nil, characters: "w", charactersIgnoringModifiers: baseCharacter, isARepeat: false, keyCode: 13))
+            with: .keyDown,
+            location: .zero,
+            modifierFlags: .command,
+            timestamp: ProcessInfo.processInfo.systemUptime,
+            windowNumber: window.windowNumber,
+            context: nil,
+            characters: "w",
+            charactersIgnoringModifiers: baseCharacter,
+            isARepeat: false,
+            keyCode: 13))
         // Command-remapped layouts translate characters but retain their base glyph
         // in charactersIgnoringModifiers. AppKit tries the window before the menu.
         if !window.performKeyEquivalent(with: event) {
-            let menu = NSMenu()
-            let close = menu.addItem(
-                withTitle: "Close Window",
-                action: #selector(NSWindow.performClose(_:)),
-                keyEquivalent: "w")
-            close.target = window
-            #expect(menu.performKeyEquivalent(with: event))
+            #expect(NSApp.sendAction(#selector(NSWindow.performClose(_:)), to: window, from: nil))
         }
     }
 
