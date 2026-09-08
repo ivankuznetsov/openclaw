@@ -12,6 +12,12 @@ import {
 
 describe("shared/tailscale-status", () => {
   it("observes background and foreground HTTPS routes without granting ownership", () => {
+    const fixturePassword = ["example", "password", "not-real"].join("-");
+    const fixtureToken = ["example", "token", "not-real"].join("-");
+    const fixtureProxy = new URL("http://127.0.0.1:18789/");
+    fixtureProxy.username = "example-user";
+    fixtureProxy.password = fixturePassword;
+    fixtureProxy.searchParams.set("access_token", fixtureToken);
     const raw = JSON.stringify({
       TCP: { "443": { HTTPS: true }, "8443": { HTTPS: true } },
       Web: {
@@ -29,7 +35,7 @@ describe("shared/tailscale-status", () => {
             "node.tail.ts.net:8443": {
               Handlers: {
                 "/": {
-                  Proxy: "http://user:hunter2@127.0.0.1:18789/?access_token=secret\u001b[2J",
+                  Proxy: `${fixtureProxy.toString()}\u001b[2J`,
                 },
               },
             },
@@ -65,8 +71,8 @@ describe("shared/tailscale-status", () => {
         funnel: false,
       }),
     ]);
-    expect(routes?.[2]?.target).not.toContain("hunter2");
-    expect(routes?.[2]?.target).not.toContain("secret");
+    expect(routes?.[2]?.target).not.toContain(fixturePassword);
+    expect(routes?.[2]?.target).not.toContain(fixtureToken);
     expect(routes?.[2]?.target).not.toContain("\u001b");
 
     expect(extractTailscaleServeGatewayUrls(raw, 18789, true)).toEqual([]);

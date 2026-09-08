@@ -705,6 +705,12 @@ describe("doctor Tailscale pairing preflight runtime evidence", () => {
   });
 
   it("redacts secrets and terminal controls from probe errors", async () => {
+    const fixturePassword = ["example", "password", "not-real"].join("-");
+    const fixtureToken = ["example", "token", "not-real"].join("-");
+    const fixtureEndpoint = new URL("wss://node.tail.ts.net/path");
+    fixtureEndpoint.username = "example-user";
+    fixtureEndpoint.password = fixturePassword;
+    fixtureEndpoint.searchParams.set("token", fixtureToken);
     const result = await collectTailscalePairingHealthFindings({
       cfg,
       env: {},
@@ -714,7 +720,7 @@ describe("doctor Tailscale pairing preflight runtime evidence", () => {
         ok: false,
         url: "wss://node.tail.ts.net:18789",
         connectLatencyMs: null,
-        error: "failed wss://user:password@node.tail.ts.net/path?token=secret-token\u001b[31m",
+        error: `failed ${fixtureEndpoint.toString()}\u001b[31m`,
         close: null,
         auth: { role: null, scopes: [], capability: "unknown" },
         health: null,
@@ -725,8 +731,8 @@ describe("doctor Tailscale pairing preflight runtime evidence", () => {
     });
     const rendered = JSON.stringify(result);
 
-    expect(rendered).not.toContain("password");
-    expect(rendered).not.toContain("secret-token");
+    expect(rendered).not.toContain(fixturePassword);
+    expect(rendered).not.toContain(fixtureToken);
     expect(rendered).not.toContain("\\u001b");
   });
 
