@@ -45,7 +45,12 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.Buffer
 import java.io.IOException
+import java.net.ConnectException
+import java.net.NoRouteToHostException
+import java.net.SocketException
+import java.net.SocketTimeoutException
 import java.net.URI
+import java.net.UnknownHostException
 import java.util.Base64
 import java.util.Locale
 import java.util.UUID
@@ -297,6 +302,8 @@ internal suspend fun awaitGatewayReconnectSignal(
     onTimeout(delayMs) { false }
   }
 
+internal const val GATEWAY_CONNECT_TIMEOUT_MS = 20_000L
+
 /**
  * WebSocket RPC session that maintains gateway connection lifecycle, auth, events, and node invokes.
  */
@@ -311,6 +318,8 @@ class GatewaySession(
   private val onInvoke: (suspend (InvokeRequest) -> InvokeResult)? = null,
   private val onTlsFingerprint: ((stableId: String, fingerprint: String) -> Unit)? = null,
   private val customHeadersProvider: ((stableId: String) -> Map<String, String>)? = null,
+  private val connectTimeoutMs: Long = GATEWAY_CONNECT_TIMEOUT_MS,
+  private val webSocketFactory: ((OkHttpClient, Request, WebSocketListener) -> WebSocket)? = null,
 ) {
   private companion object {
     // Keep connect timeout above observed gateway unauthorized close on lower-end devices.
@@ -434,6 +443,7 @@ class GatewaySession(
     @Volatile var reconnectPausedForAuthFailure = false
 
     var attempt = 0
+    var cleanupDeadline: Job? = null
   }
 
   private val lifecycleLock = Any()
@@ -467,9 +477,27 @@ class GatewaySession(
   ) {
     synchronized(notificationLock) {
       val connectionToClose: Connection?
+      val target = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls, bootstrapHandoff)
       synchronized(lifecycleLock) {
-        desired = DesiredConnection(endpoint, token, bootstrapToken, password, options, tls, bootstrapHandoff)
+        desired?.cleanupDeadline?.cancel()
+        desired = target
         connectionToClose = currentConnection
+        if (connectionToClose != null) {
+          // A replacement cannot start another resolver until the previous transport drains.
+          // Bound its visible wait independently of OkHttp's eventual cancellation callback.
+          target.cleanupDeadline =
+            scope.launch(Dispatchers.IO) {
+              delay(connectTimeoutMs)
+              synchronized(notificationLock) {
+                if (synchronized(lifecycleLock) {
+                    desired === target && currentConnection === connectionToClose
+                  }
+                ) {
+                  onConnectFailure(gatewayNetworkConnectError(waitingForCleanup = true), false)
+                }
+              }
+            }
+        }
         if (job?.isActive != true) {
           job = scope.launch(Dispatchers.IO) { runLoop() }
         } else {
@@ -495,6 +523,7 @@ class GatewaySession(
     val connectionToClose: Connection?
     val cleanup: Job
     synchronized(lifecycleLock) {
+      desired?.cleanupDeadline?.cancel()
       desired = null
       drainReconnectSignals()
       connectionToClose = currentConnection
@@ -993,7 +1022,13 @@ class GatewaySession(
     private var connectRequestId: String? = null
     val tlsConfig: GatewayTlsConfig? =
       buildGatewayTlsConfig(target.tls) { fingerprint ->
-        onTlsFingerprint?.invoke(target.tls?.stableId ?: target.endpoint.stableId, fingerprint)
+        synchronized(notificationLock) {
+          synchronized(lifecycleLock) {
+            if (currentConnection === this && desired === target && state.get() != ConnectionState.CLOSED) {
+              onTlsFingerprint?.invoke(target.tls?.stableId ?: target.endpoint.stableId, fingerprint)
+            }
+          }
+        }
       }
     private val client: OkHttpClient = buildClient()
     private val listener = Listener()
@@ -1031,10 +1066,24 @@ class GatewaySession(
           tls = target.tls,
           customHeadersProvider = customHeadersProvider,
         )
-      // OkHttp can invoke onOpen before newWebSocket returns. Publish under the
-      // send lock so the handshake cannot observe a not-yet-installed socket.
-      writeLock.withLock { socket = client.newWebSocket(request, listener) }
-      return connectDeferred.await()
+      return try {
+        withTimeout(connectTimeoutMs) {
+          // OkHttp can invoke onOpen before newWebSocket returns. Keep publication under the
+          // send lock, and reject a retirement that won while this coroutine waited for it.
+          writeLock.withLock {
+            currentCoroutineContext().ensureActive()
+            synchronized(lifecycleLock) {
+              check(state.get() == ConnectionState.CONNECTING && desired === target) { "Gateway closed" }
+              socket = webSocketFactory?.invoke(client, request, listener) ?: client.newWebSocket(request, listener)
+            }
+          }
+          connectDeferred.await()
+        }
+      } catch (_: TimeoutCancellationException) {
+        throw GatewayConnectFailure(gatewayNetworkConnectError(timedOut = true))
+      } catch (_: GatewayRequestOutcomeUnknown) {
+        throw GatewayConnectFailure(gatewayNetworkConnectError())
+      }
     }
 
     suspend fun request(
@@ -1050,6 +1099,9 @@ class GatewaySession(
         sendJson(buildRequestFrame(id = id, method = method, params = params), withEnqueue)
         return withTimeout(timeoutMs) { deferred.await() }
       } catch (err: TimeoutCancellationException) {
+        if (method == GatewayMethod.Connect.rawValue) {
+          throw GatewayConnectFailure(gatewayNetworkConnectError(timedOut = true))
+        }
         throw GatewayRequestOutcomeUnknown("request timeout")
       } finally {
         pending.remove(id)
@@ -1260,15 +1312,17 @@ class GatewaySession(
     fun markReady(): Boolean = state.compareAndSet(ConnectionState.CONNECTING, ConnectionState.READY)
 
     fun closeQuietly() {
-      if (state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED) {
-        incomingMessages.close()
-        if (!connectDeferred.isCompleted) {
-          connectDeferred.completeExceptionally(IllegalStateException("Gateway closed"))
+      synchronized(lifecycleLock) {
+        if (state.getAndSet(ConnectionState.CLOSED) != ConnectionState.CLOSED) {
+          incomingMessages.close()
+          if (!connectDeferred.isCompleted) {
+            connectDeferred.completeExceptionally(IllegalStateException("Gateway closed"))
+          }
         }
+        // Explicit retirement is immediate. WebSocket.close() only queues a close frame and can
+        // leave the old transport live for OkHttp's full close timeout.
+        socket?.cancel() ?: closedDeferred.complete(Unit)
       }
-      // Explicit retirement is immediate. WebSocket.close() only queues a close frame and can
-      // leave the old transport live for OkHttp's full close timeout.
-      socket?.cancel() ?: closedDeferred.complete(Unit)
     }
 
     @OptIn(DelicateCoroutinesApi::class)
@@ -1325,16 +1379,22 @@ class GatewaySession(
         webSocket: WebSocket,
         response: Response,
       ) {
-        connectHandshakeJob =
-          connectionScope.launch {
-            try {
-              val challenge = awaitConnectChallenge()
-              sendConnect(challenge)
-            } catch (err: Throwable) {
-              connectDeferred.completeExceptionally(err)
-              closeQuietly()
-            }
+        synchronized(lifecycleLock) {
+          if (currentConnection !== this@Connection || desired !== target || state.get() != ConnectionState.CONNECTING) {
+            webSocket.cancel()
+            return
           }
+          connectHandshakeJob =
+            connectionScope.launch {
+              try {
+                val challenge = awaitConnectChallenge()
+                sendConnect(challenge)
+              } catch (err: Throwable) {
+                connectDeferred.completeExceptionally(err)
+                closeQuietly()
+              }
+            }
+        }
       }
 
       override fun onMessage(
@@ -1834,7 +1894,7 @@ class GatewaySession(
       try {
         withTimeout(2_000) { connectChallengeDeferred.await() }
       } catch (err: TimeoutCancellationException) {
-        throw IllegalStateException("connect challenge timeout", err)
+        throw GatewayConnectFailure(gatewayNetworkConnectError(timedOut = true))
       }
 
     private fun extractConnectChallenge(payloadJson: String?): ConnectChallenge? {
@@ -1974,32 +2034,12 @@ class GatewaySession(
             onDisconnected(if (target.attempt == 0) "Connecting…" else "Reconnecting…")
           }
         }
-        connectOnce(target)
+        connectOnce(target, loopJob)
         target.attempt = 0
       } catch (err: Throwable) {
         loopJob.ensureActive()
         if (err is CancellationException) throw err
         target.attempt = (target.attempt + 1).coerceAtMost(10)
-        synchronized(notificationLock) {
-          val failure = err as? GatewayConnectFailure
-          val current =
-            synchronized(lifecycleLock) {
-              if (job !== loopJob || !loopJob.isActive || desired !== target) {
-                false
-              } else {
-                // Commit before callbacks so a reentrant connect/reconnect owns the next state.
-                target.reconnectPausedForAuthFailure =
-                  failure?.let { shouldPauseReconnectAfterAuthFailure(target, it.gatewayError) } == true
-                true
-              }
-            }
-          if (current) {
-            onDisconnected("Gateway error: ${err.message ?: err::class.java.simpleName}")
-            if (failure != null && synchronized(lifecycleLock) { job === loopJob && loopJob.isActive && desired === target }) {
-              onConnectFailure(failure.gatewayError, target.reconnectPausedForAuthFailure)
-            }
-          }
-        }
         if (desired !== target || target.reconnectPausedForAuthFailure) continue
         if (awaitGatewayReconnectSignal(reconnectSignal, gatewayReconnectDelayMs(target.attempt))) {
           target.attempt = 0
@@ -2008,12 +2048,15 @@ class GatewaySession(
     }
   }
 
-  private suspend fun connectOnce(target: DesiredConnection) =
+  private suspend fun connectOnce(target: DesiredConnection, loopJob: Job) =
     withContext(Dispatchers.IO) {
-      val conn = Connection(target)
+      var ownedConnection: Connection? = null
       try {
+        val conn = Connection(target).also { ownedConnection = it }
         synchronized(lifecycleLock) {
           if (desired !== target) return@withContext
+          target.cleanupDeadline?.cancel()
+          target.cleanupDeadline = null
           currentConnection = conn
         }
         val connected = conn.connect()
@@ -2028,18 +2071,56 @@ class GatewaySession(
           }
         }
         conn.awaitClose()
+      } catch (err: CancellationException) {
+        throw err
+      } catch (err: Throwable) {
+        // Publish before cleanup: OkHttp cannot deliver onFailure while native DNS is blocked.
+        // The reconnect loop still waits for cleanup, so Retry cannot accumulate resolver workers.
+        synchronized(notificationLock) {
+          val conn = ownedConnection
+          val error =
+            when (err) {
+              is GatewayConnectFailure -> err.gatewayError
+              is ConnectException,
+              is NoRouteToHostException,
+              is UnknownHostException,
+              is SocketException,
+              is SocketTimeoutException,
+              -> gatewayNetworkConnectError()
+              else -> null
+            }
+          val current = synchronized(lifecycleLock) {
+            if ((conn != null && currentConnection !== conn) || desired !== target || job !== loopJob || !loopJob.isActive) {
+              false
+            } else {
+              // Commit before callbacks so a reentrant connect/reconnect owns the next state.
+              target.reconnectPausedForAuthFailure = error?.let { shouldPauseReconnectAfterAuthFailure(target, it) } == true
+              true
+            }
+          }
+          if (current) {
+            conn?.closeQuietly()
+            onDisconnected("Gateway error: ${err.message ?: err::class.java.simpleName}")
+            if (error != null && synchronized(lifecycleLock) { job === loopJob && loopJob.isActive && desired === target }) {
+              onConnectFailure(error, target.reconnectPausedForAuthFailure)
+            }
+          }
+        }
+        throw err
       } finally {
         // Callback failures and cancellation must drain this socket's owned work before the loop
         // forgets it. Otherwise a retired connect can restore device auth after a later reset.
-        withContext(NonCancellable) {
-          conn.closeQuietly()
-          conn.joinOwnedWork()
-        }
-        synchronized(lifecycleLock) {
-          if (currentConnection === conn) {
-            currentConnection = null
-            pluginSurfaceUrls = emptyMap()
-            sessionRouting = null
+        ownedConnection?.let { conn ->
+          withContext(NonCancellable) {
+            conn.closeQuietly()
+            conn.joinOwnedWork()
+          }
+          synchronized(lifecycleLock) {
+            if (currentConnection === conn) {
+              currentConnection = null
+              pluginSurfaceUrls = emptyMap()
+              sessionRouting = null
+            }
           }
         }
       }
@@ -2215,6 +2296,35 @@ class GatewaySession(
     return tls?.expectedFingerprint?.trim()?.isNotEmpty() == true
   }
 }
+
+internal fun gatewayNetworkConnectError(
+  timedOut: Boolean = false,
+  waitingForCleanup: Boolean = false,
+): GatewaySession.ErrorShape =
+  GatewaySession.ErrorShape(
+    code = "NETWORK_UNREACHABLE",
+    message =
+      when {
+        waitingForCleanup -> "The previous network request is still stopping. Check your connection, then retry."
+        timedOut -> "Gateway connection timed out. Check your network and that the Gateway is running, then retry."
+        else -> "Could not reach the Gateway. Check your network and that the Gateway is running, then retry."
+      },
+    details =
+      GatewayErrorDetails(
+        code = "NETWORK_UNREACHABLE",
+        canRetryWithDeviceToken = false,
+        recommendedNextStep = null,
+        reason =
+          if (waitingForCleanup) {
+            "transport-cleanup"
+          } else if (timedOut) {
+            "timeout"
+          } else {
+            "unreachable"
+          },
+        retryable = true,
+      ),
+  )
 
 /** Decides whether auth failures should stop reconnect churn until the user changes credentials. */
 internal fun shouldPauseGatewayReconnectAfterAuthFailure(

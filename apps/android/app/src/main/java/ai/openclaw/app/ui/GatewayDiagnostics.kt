@@ -39,6 +39,9 @@ internal fun gatewayStatusLabel(
     status == "connected (operator offline)" -> nativeString("Connected (operator offline)")
     isConnected -> nativeString("Ready")
     status == "offline" -> nativeString("Offline")
+    gatewayConnectionProblem?.isNetworkFailure == true && gatewayConnectionProblem.reason == "transport-cleanup" ->
+      nativeString("Stopping previous connection")
+    gatewayConnectionProblem?.isNetworkFailure == true -> nativeString("Cannot reach gateway")
     status.contains("connecting") || status.contains("reconnecting") -> nativeString("Connecting...")
     status.contains("pair") -> nativeString("Pairing needed")
     status.contains("auth") || status.contains("device identity") -> gatewayAuthRecoveryLabel(gatewayConnectionProblem) ?: nativeString("Authentication needed")
