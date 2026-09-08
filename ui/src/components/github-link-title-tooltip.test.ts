@@ -2,6 +2,8 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 const runtimeLoad = vi.hoisted(() => {
@@ -11,6 +13,7 @@ const runtimeLoad = vi.hoisted(() => {
   });
   return { pending, release };
 });
+
 vi.mock(import("./github-link-hovercard.runtime.ts"), async (original) => {
   await runtimeLoad.pending;
   return original();
@@ -173,4 +176,72 @@ it("reserves supported GitHub titles through cold loading, failures, recovery an
     await vi.advanceTimersByTimeAsync(0);
     observer.disconnect();
   }
+});
+
+it("keeps rendered GitHub links free of native titles across preview closure and reentry", async () => {
+  runtimeLoad.release();
+  await import("./github-link-hovercard-registration.ts");
+  const provider = document.createElement(tag) as HTMLElement & { client: GatewayBrowserClient };
+  provider.client = createTestGatewayClient(async () => response);
+  provider.innerHTML = toSanitizedMarkdownHtml(
+    `${href}\n\n[the **related** issue](${href} "${href}")\n\n[![Issue icon](data:image/png;base64,x "Icon hint")](${href} "Issue details")\n\n[](${href} "Issue details")\n\n[Documentation](https://example.com "Read the documentation")`,
+  );
+  document.body.append(provider);
+  const links = [...provider.querySelectorAll<HTMLAnchorElement>(`a[href="${href}"]`)];
+  const noNativeTitles = () => {
+    for (const link of links) {
+      expect(link.hasAttribute("title")).toBe(false);
+      expect(link.querySelector("[title]")).toBeNull();
+      expect(link.href).toBe(href);
+      expect(link.target).toBe("_blank");
+    }
+  };
+  expect(links).toHaveLength(4);
+  noNativeTitles();
+  const anchor = links[1]!;
+  const child = anchor.querySelector("strong")!;
+  const pointer = (target: Element, type: string, relatedTarget?: EventTarget) =>
+    target.dispatchEvent(new MouseEvent(type, { bubbles: true, composed: true, relatedTarget }));
+  pointer(anchor, "pointerover");
+  await customElements.whenDefined(tag);
+  await vi.advanceTimersByTimeAsync(1_000);
+  // The real lazy bootstrap requires browser :hover; focus supplies intent in jsdom.
+  anchor.focus();
+  await vi.advanceTimersByTimeAsync(0);
+  expect(document.querySelector(".github-link-hovercard")?.textContent).toContain("Preview ready");
+  noNativeTitles();
+  pointer(anchor, "pointerout", child);
+  pointer(child, "pointerover", anchor);
+  await vi.advanceTimersByTimeAsync(200);
+  expect(document.querySelector(".github-link-hovercard")).not.toBeNull();
+  anchor.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+  await vi.advanceTimersByTimeAsync(200);
+  expect(document.querySelector(".github-link-hovercard")).toBeNull();
+  noNativeTitles();
+  pointer(child, "pointerout", document.body);
+  pointer(anchor, "pointerleave", document.body);
+  anchor.blur();
+  await vi.advanceTimersByTimeAsync(200);
+  noNativeTitles();
+  pointer(child, "pointerover", document.body);
+  await vi.advanceTimersByTimeAsync(300);
+  expect(document.querySelector(".github-link-hovercard")).not.toBeNull();
+  noNativeTitles();
+  expect(links[0]?.textContent).toBe("#99815");
+  expect(anchor.textContent).toBe("the related issue");
+  expect(links[2]?.querySelector("img")?.alt).toBe("Issue icon");
+  expect(links[3]?.getAttribute("aria-label")).toBe("Issue details");
+  const ordinary = provider.querySelector<HTMLAnchorElement>('a[href="https://example.com"]')!;
+  pointer(child, "pointerout", ordinary);
+  pointer(anchor, "pointerleave", ordinary);
+  ordinary.focus();
+  await vi.advanceTimersByTimeAsync(200);
+  const tooltip =
+    document.querySelector<HTMLElementTagNameMap["openclaw-tooltip"]>("openclaw-tooltip");
+  expect(tooltip?.content).toBe("Read the documentation");
+  expect(
+    tooltip?.shadowRoot?.querySelector<HTMLElement & { open: boolean }>("wa-tooltip")?.open,
+  ).toBe(true);
+  ordinary.blur();
+  expect(ordinary.title).toBe("Read the documentation");
 });

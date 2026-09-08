@@ -2,7 +2,11 @@ import MarkdownIt, { type MarkdownIt as MarkdownItParser, type Token } from "mar
 import markdownItTaskLists from "markdown-it-task-lists";
 import { t } from "../i18n/index.ts";
 import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
-import { decodeGitHubPathSegment, parseGitHubItemPath } from "./github-link-target.ts";
+import {
+  decodeGitHubPathSegment,
+  parseGitHubItemPath,
+  parseGitHubLinkTarget,
+} from "./github-link-target.ts";
 import {
   installAssistantTranscriptRoleImageRenderer,
   installAssistantTranscriptRoleMarkdown,
@@ -558,15 +562,18 @@ export function createMarkdownParser(): MarkdownItParser {
           open.markup === CODE_SPAN_LINK_MARKUP;
         const host = url.hostname.toLowerCase();
         const githubLink = isGitHubHost(host);
+        const githubPreview = githubLink ? parseGitHubLinkTarget(href) : null;
         if (generatedUrlLabel) {
           open.attrJoin("class", BARE_URL_CLASS);
         }
         let labelToken: Token | null = null;
+        let hasImage = false;
         for (let cursor = index + 1; cursor < children.length; cursor++) {
           const token = children[cursor];
           if (!token || token.type === "link_close") {
             break;
           }
+          hasImage ||= token.type === "image";
           if (
             (token.type === "text" || token.type === "code_inline") &&
             token.content.trim() !== ""
@@ -575,9 +582,17 @@ export function createMarkdownParser(): MarkdownItParser {
             break;
           }
         }
+        if (githubPreview) {
+          const title = open.attrGet("title");
+          if (title && !labelToken && !hasImage) {
+            open.attrSet("aria-label", title);
+          }
+          // A native title can outlive the rich preview when the shared adapter restores it.
+          open.attrs = open.attrs?.filter(([name]) => name !== "title") ?? null;
+        }
         if (githubLink && labelToken) {
           open.attrJoin("class", GITHUB_LINK_CLASS);
-          const item = parseGitHubItemPath(url);
+          const item = githubPreview ?? parseGitHubItemPath(url);
           const label =
             labelToken.type === "text" &&
             children[index + 1] === labelToken &&
@@ -596,7 +611,7 @@ export function createMarkdownParser(): MarkdownItParser {
           if (generatedUrlLabel) {
             labelToken.content = item ? `#${item.number}` : formatGitHubLinkLabel(url);
           }
-          if (generatedUrlLabel || itemChip) {
+          if (!githubPreview && (generatedUrlLabel || itemChip)) {
             open.attrSet("title", href);
           }
         }
