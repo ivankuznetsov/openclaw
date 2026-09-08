@@ -180,10 +180,14 @@ vi.mock("../cron/isolated-agent.js", () => ({
     (cronIsolatedRun as (...args: unknown[]) => unknown)(...args),
 }));
 
-vi.mock("../infra/tailnet.js", () => ({
-  pickPrimaryTailnetIPv4: () => testTailnetIPv4.value,
-  pickPrimaryTailnetIPv6: () => undefined,
-}));
+vi.mock("../infra/tailnet.js", async () => {
+  const actual = await vi.importActual<typeof import("../infra/tailnet.js")>("../infra/tailnet.js");
+  return {
+    ...actual,
+    pickPrimaryTailnetIPv4: () => testTailnetIPv4.value,
+    pickPrimaryTailnetIPv6: () => undefined,
+  };
+});
 
 vi.mock("../infra/tailscale.js", async () => {
   const actual =

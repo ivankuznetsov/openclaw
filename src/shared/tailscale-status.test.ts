@@ -1,7 +1,6 @@
 // Tailscale status tests cover status parsing and validation.
 import { describe, expect, it, vi } from "vitest";
 import {
-  extractTailscaleServeRouteObservations,
   extractTailscaleServeGatewayUrls,
   inspectTailscaleServeRoutesWithRunner,
   inspectTailscaleServeGatewayUrlsWithRunner,
@@ -11,7 +10,7 @@ import {
 } from "./tailscale-status.js";
 
 describe("shared/tailscale-status", () => {
-  it("observes background and foreground HTTPS routes without granting ownership", () => {
+  it("observes background and foreground HTTPS routes without granting ownership", async () => {
     const fixturePassword = ["example", "password", "not-real"].join("-");
     const fixtureToken = ["example", "token", "not-real"].join("-");
     const fixtureProxy = new URL("http://127.0.0.1:18789/");
@@ -44,7 +43,11 @@ describe("shared/tailscale-status", () => {
       },
     });
 
-    const routes = extractTailscaleServeRouteObservations(raw);
+    const inspection = await inspectTailscaleServeRoutesWithRunner(
+      vi.fn().mockResolvedValue({ code: 0, stdout: raw }),
+    );
+    expect(inspection.status).toBe("ok");
+    const routes = inspection.status === "ok" ? inspection.routes : undefined;
     expect(routes).toEqual([
       {
         management: "background",

@@ -86,7 +86,7 @@ function parsePossiblyNoisyStatus<T>(raw: string, schema: z.ZodType<T>): T | nul
 }
 
 /** Parses all observable HTTPS Serve routes without making an ownership decision. */
-export function extractTailscaleServeRouteObservations(
+function extractTailscaleServeRouteObservations(
   raw: string,
 ): TailscaleServeRouteObservation[] | null {
   const status = parsePossiblyNoisyStatus(raw, TailscaleServeStatusSchema);

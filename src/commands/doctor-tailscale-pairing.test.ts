@@ -5,8 +5,8 @@ import type { TailscaleServeRouteObservation } from "../shared/tailscale-status.
 import {
   TAILSCALE_PAIRING_CHECK_ID,
   collectTailscalePairingConfigurationFindings,
-  collectTailscalePairingHealthFindings,
-} from "./doctor-tailscale-pairing.js";
+} from "./doctor-tailscale-pairing-config.js";
+import { collectTailscalePairingHealthFindings } from "./doctor-tailscale-pairing.js";
 
 const externalRoute: TailscaleServeRouteObservation = {
   management: "background",
