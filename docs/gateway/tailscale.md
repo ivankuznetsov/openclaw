@@ -133,6 +133,12 @@ does not need to own that route. When the external proxy reaches the ordinary
 Gateway listener over loopback, the report checks that only the immediate
 loopback proxy is trusted through `gateway.trustedProxies`.
 
+Choose one owner for the published endpoint. If an explicit device-pair
+`publicUrl` selects an external route while managed Serve or Funnel is also
+enabled, the preflight reports the separate managed listener claim. Keep
+`gateway.tailscale.mode=off` for the external arrangement, or remove the
+explicit URL and use the managed endpoint.
+
 Runtime findings distinguish these stages:
 
 - **Configuration:** the published URL matches the observed Serve handler and

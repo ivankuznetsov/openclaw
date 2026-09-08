@@ -49,7 +49,7 @@ const TailscaleServeConfigSchema = z.object({
 });
 
 const TailscaleServeStatusSchema = TailscaleServeConfigSchema.extend({
-  Foreground: z.record(TailscaleServeConfigSchema).optional(),
+  Foreground: z.record(z.string(), TailscaleServeConfigSchema).optional(),
 });
 
 export type TailscaleServeRouteObservation = {

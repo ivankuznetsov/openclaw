@@ -26,6 +26,7 @@ import {
   pickMatchingExternalInterfaceAddress,
   safeNetworkInterfaces,
 } from "../infra/network-interfaces.js";
+import { isTailnetIPv6 } from "../infra/tailnet.js";
 import {
   deviceBootstrapProfilesEqual,
   FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE,
@@ -157,6 +158,9 @@ function isPrivateLanHost(host: string): boolean {
 
 function isMobilePairingCleartextAllowedHost(host: string): boolean {
   const normalized = normalizeMobilePairingHost(host);
+  if (isTailnetIPv6(normalized)) {
+    return false;
+  }
   return (
     normalized === "localhost" ||
     isLoopbackIpAddress(normalized) ||

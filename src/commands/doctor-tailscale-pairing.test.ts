@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GatewayProbeResult } from "../gateway/probe.js";
 import type { TailscaleServeRouteObservation } from "../shared/tailscale-status.js";
 import {
   TAILSCALE_PAIRING_CHECK_ID,
@@ -60,6 +61,23 @@ describe("doctor Tailscale pairing preflight configuration", () => {
     ]);
   });
 
+  it("classifies an explicitly selected public URL as external ingress", () => {
+    const result = findings({
+      gateway: {
+        bind: "loopback",
+        tailscale: { mode: "serve" },
+      },
+    });
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ requirement: "external-serve-route" }),
+        expect.objectContaining({ requirement: "external-managed-mode" }),
+        expect.objectContaining({ requirement: "proxy-attribution" }),
+      ]),
+    );
+  });
+
   it("reports missing immediate loopback proxy trust independently of route liveness", () => {
     const result = findings({ gateway: { bind: "loopback", tailscale: { mode: "off" } } });
 
@@ -97,6 +115,97 @@ describe("doctor Tailscale pairing preflight configuration", () => {
     expect(result.map((entry) => entry.message).join(" ")).not.toContain("8096");
   });
 
+  it("reports a Serve handler using the wrong backend scheme", () => {
+    const result = findings(
+      { gateway: { bind: "loopback", tailscale: { mode: "off" } } },
+      {
+        routes: [{ ...externalRoute, target: "https://127.0.0.1:18789" }],
+      },
+    );
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ severity: "error", requirement: "serve-route-target" }),
+      ]),
+    );
+  });
+
+  it("accepts HTTPS forwarding for a TLS-enabled Gateway", () => {
+    const result = findings(
+      {
+        gateway: {
+          bind: "loopback",
+          tailscale: { mode: "off" },
+          tls: { enabled: true },
+          trustedProxies: ["127.0.0.1"],
+        },
+      },
+      {
+        routes: [{ ...externalRoute, target: "https://127.0.0.1:18789" }],
+      },
+    );
+
+    expect(result.some((entry) => entry.requirement === "serve-route-target")).toBe(false);
+  });
+
+  it("accepts a foreground managed route with its isolated backend port", () => {
+    const result = findings(
+      { gateway: { bind: "loopback", tailscale: { mode: "serve" } } },
+      {
+        source: "gateway.tailscale.mode=serve",
+        url: "wss://node.tail.ts.net",
+        routes: [
+          {
+            ...externalRoute,
+            management: "foreground",
+            port: 443,
+            target: "http://127.0.0.1:41234",
+          },
+        ],
+      },
+    );
+
+    expect(result.some((entry) => entry.requirement === "serve-route-target")).toBe(false);
+    expect(result.some((entry) => entry.requirement === "proxy-attribution")).toBe(false);
+  });
+
+  it("reports a managed endpoint without an active foreground claim", () => {
+    const result = findings(
+      { gateway: { bind: "loopback", tailscale: { mode: "serve" } } },
+      {
+        url: "wss://node.tail.ts.net",
+        source: "gateway.tailscale.mode=serve",
+        routes: [{ ...externalRoute, port: 443 }],
+      },
+    );
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ severity: "warning", requirement: "managed-route-active" }),
+      ]),
+    );
+  });
+
+  it("recognizes a public URL that selects the managed foreground route", () => {
+    const result = findings(
+      { gateway: { bind: "loopback", tailscale: { mode: "serve" } } },
+      {
+        url: "wss://node.tail.ts.net",
+        routes: [
+          {
+            ...externalRoute,
+            management: "foreground",
+            port: 443,
+            target: "http://127.0.0.1:41234",
+          },
+        ],
+      },
+    );
+
+    expect(result.some((entry) => entry.requirement === "external-serve-route")).toBe(false);
+    expect(result.some((entry) => entry.requirement === "serve-route-target")).toBe(false);
+  });
+
   it("flags an insecure raw tailnet WebSocket URL", () => {
     const result = findings(
       { gateway: { bind: "tailnet", tailscale: { mode: "off" } } },
@@ -110,6 +219,19 @@ describe("doctor Tailscale pairing preflight configuration", () => {
           requirement: "secure-mobile-url",
           path: "gateway.remote.url",
         }),
+      ]),
+    );
+  });
+
+  it("flags an insecure Tailscale IPv6 WebSocket URL", () => {
+    const result = findings(
+      { gateway: { bind: "tailnet", tailscale: { mode: "off" } } },
+      { url: "ws://[fd7a:115c:a1e0::9]:18789", source: "gateway.remote.url", routes: [] },
+    );
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ severity: "error", requirement: "secure-mobile-url" }),
       ]),
     );
   });
@@ -158,10 +280,99 @@ describe("doctor Tailscale pairing preflight configuration", () => {
     );
   });
 
+  it("reports browser origin policy when Serve status is unavailable", () => {
+    const result = findings(
+      {
+        gateway: {
+          tailscale: { mode: "serve" },
+          controlUi: { allowedOrigins: ["https://other.example.com"] },
+        },
+      },
+      {
+        url: "wss://gateway.example.com:18789",
+        source: "gateway.tailscale.mode=serve",
+        status: "unavailable",
+      },
+    );
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ requirement: "serve-status-available" }),
+        expect.objectContaining({ requirement: "control-ui-origin" }),
+      ]),
+    );
+  });
+
+  it("requires trust for the loopback family used by the Serve target", () => {
+    const result = findings(
+      {
+        gateway: {
+          bind: "loopback",
+          tailscale: { mode: "off" },
+          trustedProxies: ["127.0.0.1"],
+        },
+      },
+      { routes: [{ ...externalRoute, target: "http://[::1]:18789" }] },
+    );
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ severity: "error", requirement: "proxy-attribution" }),
+      ]),
+    );
+  });
+
+  it("does not call inferred token auth disabled for Funnel", () => {
+    const result = findings(
+      {
+        gateway: {
+          bind: "loopback",
+          tailscale: { mode: "off" },
+          trustedProxies: ["127.0.0.1"],
+          auth: { token: "configured-token" },
+        },
+      },
+      { routes: [{ ...externalRoute, funnel: true }] },
+    );
+
+    expect(result.some((entry) => entry.requirement === "external-funnel-auth")).toBe(false);
+  });
+
+  it("reports explicitly disabled auth for Funnel", () => {
+    const result = findings(
+      {
+        gateway: {
+          bind: "loopback",
+          tailscale: { mode: "off" },
+          trustedProxies: ["127.0.0.1"],
+          auth: { mode: "none" },
+        },
+      },
+      { routes: [{ ...externalRoute, funnel: true }] },
+    );
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ severity: "error", requirement: "external-funnel-auth" }),
+      ]),
+    );
+  });
+
   it("does not require ordinary-listener proxy trust for managed ingress", () => {
     const result = findings(
       { gateway: { bind: "loopback", tailscale: { mode: "serve" } } },
-      { source: "gateway.tailscale.mode=serve" },
+      {
+        url: "wss://node.tail.ts.net",
+        source: "gateway.tailscale.mode=serve",
+        routes: [
+          {
+            ...externalRoute,
+            management: "foreground",
+            port: 443,
+            target: "http://127.0.0.1:41234",
+          },
+        ],
+      },
     );
 
     expect(result.some((entry) => entry.requirement === "proxy-attribution")).toBe(false);
@@ -364,10 +575,165 @@ describe("doctor Tailscale pairing preflight runtime evidence", () => {
     expect(result.some((finding) => finding.requirement === "gateway-authenticated")).toBe(false);
   });
 
+  it("limits the HTTP liveness response body", async () => {
+    let bodyCancelled = false;
+    let bodySent = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (bodySent) {
+          return;
+        }
+        bodySent = true;
+        controller.enqueue(new TextEncoder().encode("x".repeat(5000)));
+      },
+      cancel() {
+        bodyCancelled = true;
+      },
+    });
+    const result = await collectTailscalePairingHealthFindings({
+      cfg,
+      env: {},
+      timeoutMs: 1000,
+      runCommandWithTimeout: serveRunner(),
+      fetchFn: vi.fn().mockResolvedValue(new Response(body, { status: 200 })),
+      probeGateway: vi.fn().mockResolvedValue({
+        ok: false,
+        url: "wss://node.tail.ts.net:18789",
+        connectLatencyMs: null,
+        error: "unreachable",
+        close: null,
+        auth: { role: null, scopes: [], capability: "unknown" },
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+      }),
+    });
+
+    expect(bodyCancelled).toBe(true);
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ requirement: "http-liveness-unverified" }),
+      ]),
+    );
+  });
+
+  it("aborts sibling network work after an unexpected probe failure", async () => {
+    let fetchAborted = false;
+    const fetchFn = vi.fn(
+      async (_input: RequestInfo | URL, init?: RequestInit) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              fetchAborted = true;
+              reject(new DOMException("aborted", "AbortError"));
+            },
+            { once: true },
+          );
+        }),
+    );
+
+    await expect(
+      collectTailscalePairingHealthFindings({
+        cfg,
+        env: {},
+        runCommandWithTimeout: serveRunner(),
+        fetchFn,
+        probeGateway: vi.fn().mockRejectedValue(new Error("probe failed")),
+      }),
+    ).rejects.toThrow("probe failed");
+    expect(fetchAborted).toBe(true);
+  });
+
+  it("scopes the remote TLS fingerprint to its exact URL source", async () => {
+    const probe = vi.fn().mockResolvedValue({
+      ok: false,
+      url: "wss://node.tail.ts.net:18789",
+      connectLatencyMs: null,
+      error: "unreachable",
+      close: null,
+      auth: { role: null, scopes: [], capability: "unknown" },
+      health: null,
+      status: null,
+      presence: null,
+      configSnapshot: null,
+    });
+    const fetchFn = vi.fn().mockResolvedValue(new Response("", { status: 503 }));
+    const tlsFingerprint = "ab".repeat(32);
+
+    await collectTailscalePairingHealthFindings({
+      cfg: {
+        gateway: {
+          tailscale: { mode: "off" },
+          remote: { url: "wss://node.tail.ts.net:18789", tlsFingerprint },
+        },
+      },
+      env: {},
+      runCommandWithTimeout: serveRunner(),
+      fetchFn,
+      probeGateway: probe,
+    });
+    expect(probe).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        config: {
+          gateway: {
+            remote: { url: "wss://node.tail.ts.net:18789", tlsFingerprint },
+          },
+        },
+      }),
+    );
+
+    await collectTailscalePairingHealthFindings({
+      cfg: {
+        gateway: {
+          tailscale: { mode: "off" },
+          remote: { url: "wss://remote.example", tlsFingerprint },
+        },
+        plugins: {
+          entries: {
+            "device-pair": { config: { publicUrl: "wss://node.tail.ts.net:18789" } },
+          },
+        },
+      },
+      env: {},
+      runCommandWithTimeout: serveRunner(),
+      fetchFn,
+      probeGateway: probe,
+    });
+    expect(probe).toHaveBeenLastCalledWith(expect.objectContaining({ config: {} }));
+  });
+
+  it("redacts secrets and terminal controls from probe errors", async () => {
+    const result = await collectTailscalePairingHealthFindings({
+      cfg,
+      env: {},
+      runCommandWithTimeout: serveRunner(),
+      fetchFn: vi.fn().mockResolvedValue(new Response("", { status: 503 })),
+      probeGateway: vi.fn().mockResolvedValue({
+        ok: false,
+        url: "wss://node.tail.ts.net:18789",
+        connectLatencyMs: null,
+        error: "failed wss://user:password@node.tail.ts.net/path?token=secret-token\u001b[31m",
+        close: null,
+        auth: { role: null, scopes: [], capability: "unknown" },
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+      }),
+    });
+    const rendered = JSON.stringify(result);
+
+    expect(rendered).not.toContain("password");
+    expect(rendered).not.toContain("secret-token");
+    expect(rendered).not.toContain("\\u001b");
+  });
+
   it("uses one outer deadline and returns a bounded unknown result", async () => {
     const probe = vi.fn(
-      async (options: { signal?: AbortSignal }) =>
-        await new Promise((resolve) => {
+      async (options: { signal?: AbortSignal }): Promise<GatewayProbeResult> =>
+        await new Promise<GatewayProbeResult>((resolve) => {
           options.signal?.addEventListener(
             "abort",
             () =>
@@ -419,7 +785,9 @@ describe("doctor Tailscale pairing preflight runtime evidence", () => {
         .mockResolvedValue(
           new Response(JSON.stringify({ ok: true, status: "live" }), { status: 200 }),
         ),
-      probeGateway: vi.fn(async () => await new Promise(() => {})),
+      probeGateway: vi.fn(
+        async (): Promise<GatewayProbeResult> => await new Promise<GatewayProbeResult>(() => {}),
+      ),
     });
 
     expect(result).toEqual(

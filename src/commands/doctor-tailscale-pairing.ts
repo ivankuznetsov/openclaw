@@ -10,6 +10,8 @@ import { isTrustedProxyAddress } from "../gateway/net.js";
 import { checkBrowserOrigin } from "../gateway/origin-check.js";
 import { probeGateway as probeGatewayEndpoint } from "../gateway/probe.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { readResponseWithLimit } from "../infra/http-body.js";
+import { isTailnetIPv4, isTailnetIPv6 } from "../infra/tailnet.js";
 import {
   resolveConfiguredPairingPublicUrl,
   resolvePairingGatewayUrl,
@@ -24,6 +26,7 @@ import {
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 
 export const TAILSCALE_PAIRING_CHECK_ID = "core/doctor/tailscale-pairing";
+const HTTP_LIVENESS_MAX_BODY_BYTES = 4 * 1024;
 
 type PairingUrlResult = Awaited<ReturnType<typeof resolvePairingGatewayUrl>>;
 type ServeInspection = Awaited<ReturnType<typeof inspectTailscaleServeRoutesWithRunner>>;
@@ -74,20 +77,27 @@ function routeCoversPath(routePath: string, requestPath: string): boolean {
   return requestPath === mount || requestPath.startsWith(`${mount}/`);
 }
 
-function routeTargetsGateway(route: TailscaleServeRouteObservation, gatewayPort: number): boolean {
+function gatewayRouteLoopbackHost(
+  route: TailscaleServeRouteObservation,
+  gatewayPort: number,
+  gatewayTlsEnabled: boolean,
+): string | null {
   if (!route.target) {
-    return false;
+    return null;
   }
   const raw = route.target.includes("://") ? route.target : `http://${route.target}`;
   try {
     const target = new URL(raw);
     const host = target.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-    return (
-      (host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host)) &&
+    const loopback = host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host);
+    const expectedProtocol = gatewayTlsEnabled ? "https:" : "http:";
+    return loopback &&
+      target.protocol === expectedProtocol &&
       Number.parseInt(target.port, 10) === gatewayPort
-    );
+      ? host
+      : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -100,11 +110,17 @@ function browserOrigin(url: URL): string {
   return `${protocol}//${url.host}`;
 }
 
-function isLikelyTailscaleTarget(url: URL, cfg: OpenClawConfig): boolean {
+function isConfiguredManagedTailscalePublication(source: string | undefined): boolean {
+  return source?.startsWith("gateway.tailscale.mode=") === true;
+}
+
+function isLikelyTailscaleTarget(url: URL, source: string | undefined): boolean {
+  const hostname = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
   return (
-    (cfg.gateway?.tailscale?.mode ?? "off") !== "off" ||
-    url.hostname.toLowerCase().endsWith(".ts.net") ||
-    /^100\.(?:6[4-9]|[78]\d|9[0-5])\./.test(url.hostname)
+    isConfiguredManagedTailscalePublication(source) ||
+    hostname.endsWith(".ts.net") ||
+    isTailnetIPv4(hostname) ||
+    isTailnetIPv6(hostname)
   );
 }
 
@@ -144,7 +160,30 @@ export function collectTailscalePairingConfigurationFindings(
     });
   }
 
-  const tailscaleRelevant = isLikelyTailscaleTarget(url, params.cfg);
+  if (params.cfg.gateway?.controlUi?.enabled !== false) {
+    const origin = browserOrigin(url);
+    const originResult = checkBrowserOrigin({
+      requestHost: url.host,
+      origin,
+      allowedOrigins: params.cfg.gateway?.controlUi?.allowedOrigins,
+      allowHostHeaderOriginFallback:
+        params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
+      isLocalClient: false,
+    });
+    if (!originResult.ok) {
+      findings.push({
+        checkId: TAILSCALE_PAIRING_CHECK_ID,
+        severity: "warning",
+        message: `The Control UI browser origin ${origin} is not accepted by current policy; Android pairing is unaffected by this browser-only finding.`,
+        path: "gateway.controlUi.allowedOrigins",
+        target: origin,
+        requirement: "control-ui-origin",
+        fixHint: "Add this exact HTTPS origin if the Control UI will be opened through it.",
+      });
+    }
+  }
+
+  const tailscaleRelevant = isLikelyTailscaleTarget(url, params.pairingUrl.source);
   if (params.serveInspection.status !== "ok") {
     if (tailscaleRelevant) {
       findings.push({
@@ -190,11 +229,40 @@ export function collectTailscalePairingConfigurationFindings(
     return findings;
   }
 
-  const managedMode = params.cfg.gateway?.tailscale?.mode ?? "off";
-  const gatewayRoutes = authorityRoutes.filter((route) =>
-    routeTargetsGateway(route, params.gatewayPort),
+  const configuredManagedPublication = isConfiguredManagedTailscalePublication(
+    params.pairingUrl.source,
   );
-  if (managedMode === "off" && gatewayRoutes.length === 0) {
+  const hasForegroundRoute = authorityRoutes.some((route) => route.management === "foreground");
+  if (configuredManagedPublication && !hasForegroundRoute) {
+    findings.push({
+      checkId: TAILSCALE_PAIRING_CHECK_ID,
+      severity: "warning",
+      message:
+        "The configured managed Tailscale endpoint has no active foreground Serve claim; the observed matching route is persistent and may belong to another service or an older setup.",
+      path: "gateway.tailscale.mode",
+      target,
+      requirement: "managed-route-active",
+      fixHint:
+        "Inspect the foreground Serve owner, resolve any listener conflict, and restart the Gateway without clearing unrelated persistent routes.",
+    });
+    return findings;
+  }
+
+  const gatewayRoutes = authorityRoutes.flatMap((route) => {
+    const loopbackHost = gatewayRouteLoopbackHost(
+      route,
+      params.gatewayPort,
+      params.cfg.gateway?.tls?.enabled === true,
+    );
+    return loopbackHost ? [{ loopbackHost, route }] : [];
+  });
+  const managedPublication =
+    configuredManagedPublication ||
+    ((params.cfg.gateway?.tailscale?.mode ?? "off") !== "off" &&
+      port === 443 &&
+      path === "/" &&
+      authorityRoutes.some((route) => route.management === "foreground"));
+  if (!managedPublication && gatewayRoutes.length === 0) {
     findings.push({
       checkId: TAILSCALE_PAIRING_CHECK_ID,
       severity: "error",
@@ -207,23 +275,42 @@ export function collectTailscalePairingConfigurationFindings(
     return findings;
   }
 
-  if (managedMode === "off") {
+  if (!managedPublication) {
     findings.push({
       checkId: TAILSCALE_PAIRING_CHECK_ID,
       severity: "info",
       message:
-        "An externally managed Tailscale Serve route matches the mobile endpoint; gateway.tailscale.mode=off is valid for this arrangement.",
+        "An externally managed Tailscale Serve route matches the mobile endpoint; gateway.tailscale.mode=off is a valid arrangement for this endpoint.",
       target,
       requirement: "external-serve-route",
       fixHint:
         "Keep the external route and configure only its immediate proxy trust and normal Gateway authentication.",
     });
 
+    if ((params.cfg.gateway?.tailscale?.mode ?? "off") !== "off") {
+      findings.push({
+        checkId: TAILSCALE_PAIRING_CHECK_ID,
+        severity: "warning",
+        message:
+          "The selected mobile endpoint is externally managed while Gateway-managed Tailscale exposure is also enabled; the Gateway will attempt a separate managed listener claim.",
+        path: "gateway.tailscale.mode",
+        target,
+        requirement: "external-managed-mode",
+        fixHint:
+          "Set gateway.tailscale.mode=off if this external route is intentional, or remove the explicit public URL to use the managed endpoint.",
+      });
+    }
+
     const trustedProxies = params.cfg.gateway?.trustedProxies;
-    const trustsLoopback =
-      isTrustedProxyAddress("127.0.0.1", trustedProxies) ||
-      isTrustedProxyAddress("::1", trustedProxies);
-    if (!trustsLoopback) {
+    const hasUntrustedProxy = gatewayRoutes.some(({ loopbackHost }) =>
+      loopbackHost === "localhost"
+        ? !(
+            isTrustedProxyAddress("127.0.0.1", trustedProxies) ||
+            isTrustedProxyAddress("::1", trustedProxies)
+          )
+        : !isTrustedProxyAddress(loopbackHost, trustedProxies),
+    );
+    if (hasUntrustedProxy) {
       findings.push({
         checkId: TAILSCALE_PAIRING_CHECK_ID,
         severity: "error",
@@ -238,8 +325,8 @@ export function collectTailscalePairingConfigurationFindings(
     }
 
     if (
-      gatewayRoutes.some((route) => route.funnel) &&
-      (params.cfg.gateway?.auth?.mode ?? "none") === "none"
+      gatewayRoutes.some(({ route }) => route.funnel) &&
+      params.cfg.gateway?.auth?.mode === "none"
     ) {
       findings.push({
         checkId: TAILSCALE_PAIRING_CHECK_ID,
@@ -250,29 +337,6 @@ export function collectTailscalePairingConfigurationFindings(
         target,
         requirement: "external-funnel-auth",
         fixHint: "Configure token, password, or trusted-proxy authentication before using Funnel.",
-      });
-    }
-  }
-
-  if (params.cfg.gateway?.controlUi?.enabled !== false) {
-    const origin = browserOrigin(url);
-    const originResult = checkBrowserOrigin({
-      requestHost: url.host,
-      origin,
-      allowedOrigins: params.cfg.gateway?.controlUi?.allowedOrigins,
-      allowHostHeaderOriginFallback:
-        params.cfg.gateway?.controlUi?.dangerouslyAllowHostHeaderOriginFallback === true,
-      isLocalClient: false,
-    });
-    if (!originResult.ok) {
-      findings.push({
-        checkId: TAILSCALE_PAIRING_CHECK_ID,
-        severity: "warning",
-        message: `The Control UI browser origin ${origin} is not accepted by current policy; Android pairing is unaffected by this browser-only finding.`,
-        path: "gateway.controlUi.allowedOrigins",
-        target: origin,
-        requirement: "control-ui-origin",
-        fixHint: "Add this exact HTTPS origin if the Control UI will be opened through it.",
       });
     }
   }
@@ -311,7 +375,9 @@ async function probeHttpLiveness(params: {
     if (response.status !== 200) {
       return "unverified";
     }
-    const body = (await response.json()) as { ok?: unknown; status?: unknown };
+    const body = JSON.parse(
+      (await readResponseWithLimit(response, HTTP_LIVENESS_MAX_BODY_BYTES)).toString("utf8"),
+    ) as { ok?: unknown; status?: unknown };
     return body.ok === true && body.status === "live" ? "live" : "unverified";
   } catch {
     return "unverified";
@@ -421,8 +487,10 @@ export async function collectTailscalePairingHealthFindings(
 ): Promise<readonly HealthFinding[]> {
   const env = params.env ?? process.env;
   const timeoutMs = params.timeoutMs ?? 10_000;
+  const operationController = new AbortController();
   const { signal, cleanup } = buildTimeoutAbortSignal({
     timeoutMs,
+    signal: operationController.signal,
     operation: "doctor-tailscale-pairing",
   });
   const runCommandWithTimeout: TailscaleStatusCommandRunner =
@@ -502,6 +570,7 @@ export async function collectTailscalePairingHealthFindings(
     }
     throw error;
   } finally {
+    operationController.abort();
     cleanup();
   }
 }
