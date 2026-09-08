@@ -331,6 +331,39 @@ describe("doctor Tailscale pairing preflight runtime evidence", () => {
     );
   });
 
+  it("does not call an anonymous successful probe authenticated", async () => {
+    const result = await collectTailscalePairingHealthFindings({
+      cfg,
+      env: {},
+      runCommandWithTimeout: serveRunner(),
+      fetchFn: vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ ok: true, status: "live" }), { status: 200 }),
+        ),
+      probeGateway: vi.fn().mockResolvedValue({
+        ok: true,
+        gatewayReached: true,
+        url: "wss://node.tail.ts.net:18789",
+        connectLatencyMs: 10,
+        error: null,
+        close: null,
+        auth: { role: null, scopes: [], capability: "read_only" },
+        health: null,
+        status: null,
+        presence: null,
+        configSnapshot: null,
+      }),
+    });
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ severity: "warning", requirement: "gateway-auth-unverified" }),
+      ]),
+    );
+    expect(result.some((finding) => finding.requirement === "gateway-authenticated")).toBe(false);
+  });
+
   it("uses one outer deadline and returns a bounded unknown result", async () => {
     const probe = vi.fn(
       async (options: { signal?: AbortSignal }) =>
@@ -374,4 +407,25 @@ describe("doctor Tailscale pairing preflight runtime evidence", () => {
       ]),
     );
   });
+
+  it("enforces the outer deadline when an injected probe ignores cancellation", async () => {
+    const result = await collectTailscalePairingHealthFindings({
+      cfg,
+      env: {},
+      timeoutMs: 10,
+      runCommandWithTimeout: serveRunner(),
+      fetchFn: vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ ok: true, status: "live" }), { status: 200 }),
+        ),
+      probeGateway: vi.fn(async () => await new Promise(() => {})),
+    });
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ severity: "warning", requirement: "diagnostic-deadline" }),
+      ]),
+    );
+  }, 500);
 });

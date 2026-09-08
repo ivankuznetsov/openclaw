@@ -18,7 +18,7 @@ import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import {
   inspectTailscaleServeRoutesWithRunner,
   type TailscaleStatusCommandRunner,
-  TailscaleServeRouteObservation,
+  type TailscaleServeRouteObservation,
 } from "../shared/tailscale-status.js";
 import { buildTimeoutAbortSignal } from "../utils/fetch-timeout.js";
 
@@ -370,10 +370,7 @@ function runtimeEvidenceFindings(params: {
   }
 
   const authenticated =
-    params.probe.ok &&
-    (params.probe.auth.role !== null ||
-      params.probe.auth.scopes.length > 0 ||
-      ["read_only", "write_capable", "admin_capable"].includes(params.probe.auth.capability));
+    params.probe.ok && (params.probe.auth.role !== null || params.probe.auth.scopes.length > 0);
   if (authenticated) {
     findings.push({
       checkId: TAILSCALE_PAIRING_CHECK_ID,
@@ -406,15 +403,41 @@ function runtimeEvidenceFindings(params: {
   return findings;
 }
 
-function deadlineFinding(url: URL): HealthFinding {
+function deadlineFinding(url: URL | null): HealthFinding {
   return {
     checkId: TAILSCALE_PAIRING_CHECK_ID,
     severity: "warning",
     message: "The Tailscale pairing diagnostic reached its overall deadline.",
-    target: pairingTarget(url),
+    ...(url ? { target: pairingTarget(url) } : {}),
     requirement: "diagnostic-deadline",
     fixHint: "Run the focused check again after confirming the Tailscale CLI and endpoint respond.",
   };
+}
+
+function awaitWithAbort<T>(operation: Promise<T>, signal?: AbortSignal): Promise<T> {
+  if (!signal) {
+    return operation;
+  }
+  if (signal.aborted) {
+    return Promise.reject(signal.reason);
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener("abort", onAbort);
+        resolve(value);
+      },
+      (error) => {
+        signal.removeEventListener("abort", onAbort);
+        reject(error);
+      },
+    );
+  });
 }
 
 /** Runs the opt-in, read-only Tailscale pairing preflight under one deadline. */
@@ -435,60 +458,76 @@ export async function collectTailscalePairingHealthFindings(
         signal,
         maxOutputBytes: 400_000,
       }));
+  const findings: HealthFinding[] = [];
+  let url: URL | null = null;
 
   try {
-    const pairingUrl = await resolvePairingGatewayUrl(params.cfg, {
-      env,
-      publicUrl: resolveConfiguredPairingPublicUrl(params.cfg),
-      runCommandWithTimeout,
-      networkInterfaces: params.networkInterfaces ?? os.networkInterfaces,
-    });
-    const serveInspection = await inspectTailscaleServeRoutesWithRunner(runCommandWithTimeout);
-    const findings = [
+    const pairingUrl = await awaitWithAbort(
+      resolvePairingGatewayUrl(params.cfg, {
+        env,
+        publicUrl: resolveConfiguredPairingPublicUrl(params.cfg),
+        runCommandWithTimeout,
+        networkInterfaces: params.networkInterfaces ?? os.networkInterfaces,
+      }),
+      signal,
+    );
+    const serveInspection = await awaitWithAbort(
+      inspectTailscaleServeRoutesWithRunner(runCommandWithTimeout),
+      signal,
+    );
+    findings.push(
       ...collectTailscalePairingConfigurationFindings({
         cfg: params.cfg,
         gatewayPort: resolveGatewayPort(params.cfg, env),
         pairingUrl,
         serveInspection,
       }),
-    ];
-    const url = parsePairingUrl(pairingUrl.url);
+    );
+    url = parsePairingUrl(pairingUrl.url);
     if (!url || validateMobilePairingUrl(pairingTarget(url), pairingUrl.source)) {
       return findings;
     }
-    if (signal?.aborted) {
-      findings.push(deadlineFinding(url));
-      return findings;
-    }
 
-    const liveness = await probeHttpLiveness({
-      url,
+    const liveness = await awaitWithAbort(
+      probeHttpLiveness({
+        url,
+        signal,
+        fetchFn: params.fetchFn ?? fetch,
+      }),
       signal,
-      fetchFn: params.fetchFn ?? fetch,
-    });
+    );
     const remoteTlsFingerprint =
       pairingUrl.source === "gateway.remote.url"
         ? params.cfg.gateway?.remote?.tlsFingerprint
         : undefined;
-    const probe = await (params.probeGateway ?? probeGatewayEndpoint)({
-      url: pairingTarget(url),
-      timeoutMs,
-      includeDetails: false,
-      detailLevel: "none",
-      suppressStoredDeviceAuth: true,
-      auth: undefined,
-      config: remoteTlsFingerprint
-        ? { gateway: { remote: { url: pairingTarget(url), tlsFingerprint: remoteTlsFingerprint } } }
-        : {},
-      env,
+    const probe = await awaitWithAbort(
+      (params.probeGateway ?? probeGatewayEndpoint)({
+        url: pairingTarget(url),
+        timeoutMs,
+        includeDetails: false,
+        detailLevel: "none",
+        suppressStoredDeviceAuth: true,
+        auth: undefined,
+        config: remoteTlsFingerprint
+          ? {
+              gateway: {
+                remote: { url: pairingTarget(url), tlsFingerprint: remoteTlsFingerprint },
+              },
+            }
+          : {},
+        env,
+        signal,
+      }),
       signal,
-    });
+    );
+    findings.push(...runtimeEvidenceFindings({ url, liveness, probe }));
+    return findings;
+  } catch (error) {
     if (signal?.aborted) {
       findings.push(deadlineFinding(url));
       return findings;
     }
-    findings.push(...runtimeEvidenceFindings({ url, liveness, probe }));
-    return findings;
+    throw error;
   } finally {
     cleanup();
   }
