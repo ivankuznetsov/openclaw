@@ -1,7 +1,9 @@
 // Tailscale status tests cover status parsing and validation.
 import { describe, expect, it, vi } from "vitest";
 import {
+  extractTailscaleServeRouteObservations,
   extractTailscaleServeGatewayUrls,
+  inspectTailscaleServeRoutesWithRunner,
   inspectTailscaleServeGatewayUrlsWithRunner,
   resolveTailnetHostWithRunner,
   resolveTailscalePublishedHost,
@@ -9,6 +11,83 @@ import {
 } from "./tailscale-status.js";
 
 describe("shared/tailscale-status", () => {
+  it("observes background and foreground HTTPS routes without granting ownership", () => {
+    const raw = JSON.stringify({
+      TCP: { "443": { HTTPS: true }, "8443": { HTTPS: true } },
+      Web: {
+        "node.tail.ts.net:443": {
+          Handlers: {
+            "/": { Proxy: "http://127.0.0.1:8096" },
+            "/openclaw": { Proxy: "http://127.0.0.1:18789" },
+          },
+        },
+      },
+      Foreground: {
+        "session\u001b[31m": {
+          TCP: { "8443": { HTTPS: true } },
+          Web: {
+            "node.tail.ts.net:8443": {
+              Handlers: {
+                "/": {
+                  Proxy: "http://user:hunter2@127.0.0.1:18789/?access_token=secret\u001b[2J",
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const routes = extractTailscaleServeRouteObservations(raw);
+    expect(routes).toEqual([
+      {
+        management: "background",
+        host: "node.tail.ts.net",
+        port: 443,
+        path: "/",
+        target: "http://127.0.0.1:8096",
+        funnel: false,
+      },
+      {
+        management: "background",
+        host: "node.tail.ts.net",
+        port: 443,
+        path: "/openclaw",
+        target: "http://127.0.0.1:18789",
+        funnel: false,
+      },
+      expect.objectContaining({
+        management: "foreground",
+        session: "session",
+        host: "node.tail.ts.net",
+        port: 8443,
+        path: "/",
+        funnel: false,
+      }),
+    ]);
+    expect(routes?.[2]?.target).not.toContain("hunter2");
+    expect(routes?.[2]?.target).not.toContain("secret");
+    expect(routes?.[2]?.target).not.toContain("\u001b");
+
+    expect(extractTailscaleServeGatewayUrls(raw, 18789, true)).toEqual([]);
+  });
+
+  it("inspects route observations without collapsing invalid status into no routes", async () => {
+    const invalid = vi.fn().mockResolvedValue({ code: 0, stdout: "not-json" });
+    const empty = vi.fn().mockResolvedValue({ code: 0, stdout: "{}" });
+
+    await expect(inspectTailscaleServeRoutesWithRunner(invalid)).resolves.toEqual({
+      status: "invalid",
+    });
+    await expect(inspectTailscaleServeRoutesWithRunner(empty)).resolves.toEqual({
+      status: "ok",
+      routes: [],
+    });
+    expect(empty).toHaveBeenCalledWith(["tailscale", "serve", "status", "--json"], {
+      timeoutMs: 5000,
+    });
+  });
+
   it("keeps the deprecated named-Service formatter for shipped plugin SDK callers", () => {
     expect(
       resolveTailscalePublishedHost({
