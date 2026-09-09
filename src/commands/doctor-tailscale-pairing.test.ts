@@ -31,7 +31,7 @@ function findings(
   const status = options.status ?? "ok";
   return collectTailscalePairingConfigurationFindings({
     cfg,
-    gatewayPort: 18789,
+    gatewayPort: cfg.gateway?.port ?? 18789,
     endpoint: analyzePairingEndpoint({
       url: options.url ?? "wss://node.tail.ts.net:18789",
       source: options.source ?? "plugins.entries.device-pair.config.publicUrl",
@@ -170,14 +170,19 @@ describe("doctor Tailscale pairing preflight configuration", () => {
   });
 
   it.each([
-    ["numeric", "18789", false],
-    ["insecure HTTPS", "https+insecure://127.0.0.1:18789", true],
-  ] as const)("normalizes the supported %s proxy target form", (_label, routeTarget, tls) => {
+    ["numeric", "18789", false, 18789],
+    ["insecure HTTPS", "https+insecure://127.0.0.1:18789", true, 18789],
+    ["default HTTP", "http://127.0.0.1:80", false, 80],
+    ["implicit HTTP", "http://127.0.0.1", false, 80],
+    ["default HTTPS", "https://127.0.0.1:443", true, 443],
+    ["implicit HTTPS", "https://127.0.0.1", true, 443],
+  ] as const)("normalizes the supported %s proxy target form", (_label, routeTarget, tls, port) => {
     const result = findings(
       {
         gateway: {
           bind: "loopback",
           tailscale: { mode: "off" },
+          port,
           ...(tls ? { tls: { enabled: true } } : {}),
           trustedProxies: ["127.0.0.1"],
         },

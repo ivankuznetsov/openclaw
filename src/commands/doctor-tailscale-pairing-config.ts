@@ -62,7 +62,7 @@ export function analyzePairingEndpoint(resolved: PairingUrlResult) {
 }
 
 function effectivePort(url: URL): number {
-  return Number.parseInt(url.port || (url.protocol === "wss:" ? "443" : "80"), 10);
+  return Number(url.port || (url.protocol === "https:" || url.protocol === "wss:" ? 443 : 80));
 }
 
 function routeCoversPath(routePath: string, requestPath: string): boolean {
@@ -89,13 +89,14 @@ function selectEffectiveRoutes(
 
 function parseTailscaleProxyTarget(raw: string): URL | null {
   const trimmed = raw.trim();
-  const normalized = /^\d+$/u.test(trimmed)
-    ? `http://127.0.0.1:${trimmed}`
-    : /^https\+insecure:\/\//iu.test(trimmed)
-      ? trimmed.replace(/^https\+insecure:/iu, "https:")
-      : trimmed.includes("://")
-        ? trimmed
-        : `http://${trimmed}`;
+  let normalized = trimmed;
+  if (/^\d+$/u.test(trimmed)) {
+    normalized = `http://127.0.0.1:${trimmed}`;
+  } else if (/^https\+insecure:\/\//iu.test(trimmed)) {
+    normalized = trimmed.replace(/^https\+insecure:/iu, "https:");
+  } else if (!trimmed.includes("://")) {
+    normalized = `http://${trimmed}`;
+  }
   try {
     const target = new URL(normalized);
     return (target.protocol === "http:" || target.protocol === "https:") &&
@@ -116,22 +117,16 @@ function gatewayRouteLoopbackHost(
   if (!route.target) {
     return null;
   }
-  try {
-    const target = parseTailscaleProxyTarget(route.target);
-    if (!target) {
-      return null;
-    }
-    const host = target.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-    const loopback = host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host);
-    const expectedProtocol = gatewayTlsEnabled ? "https:" : "http:";
-    return loopback &&
-      target.protocol === expectedProtocol &&
-      Number.parseInt(target.port, 10) === gatewayPort
-      ? host
-      : null;
-  } catch {
+  const target = parseTailscaleProxyTarget(route.target);
+  if (!target) {
     return null;
   }
+  const host = target.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  const loopback = host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host);
+  const expectedProtocol = gatewayTlsEnabled ? "https:" : "http:";
+  return loopback && target.protocol === expectedProtocol && effectivePort(target) === gatewayPort
+    ? host
+    : null;
 }
 
 export function pairingTarget(url: URL): string {
