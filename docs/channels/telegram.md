@@ -167,6 +167,10 @@ Set one of the modes shown above, make sure Tailscale is running on the gateway 
 
 The Mini App is a Tailscale-only v1 path and does not support Telegram Web iframe.
 
+## Human browser handoff
+
+An owner-authorized Telegram DM can receive a portable **Open browser** link when an agent pauses on a live verification step in a managed browser tab. Open the link on the phone, authenticate to the Gateway if needed, take control of the remote tab, and select **Done — continue agent**. The task resumes in the same Telegram conversation. Group chats do not receive handoff links. See [Human browser intervention](/tools/browser-human-intervention) for setup and security details.
+
 ## Access control and activation
 
 ### Group bot identity
