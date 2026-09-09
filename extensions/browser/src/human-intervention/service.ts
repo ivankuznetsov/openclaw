@@ -7,6 +7,7 @@ import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-run
 
 const DEFAULT_PENDING_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_CONTROL_LEASE_MS = 60 * 1000;
+const MAX_LOCATED_IDS = 1_000;
 
 export type HumanInterventionOwner = {
   channel: string;
@@ -112,6 +113,8 @@ function defaultRandomId(): string {
 }
 
 export class HumanInterventionService {
+  // Locations are hints only. Never retain records or authority in this cache.
+  private readonly locatedKeys = new Map<string, string>();
   private readonly now: () => number;
   private readonly randomId: () => string;
   private readonly pendingTtlMs: number;
@@ -159,6 +162,7 @@ export class HumanInterventionService {
         `Could not reserve browser profile ${input.browser.profile}`,
       );
     }
+    this.rememberLocation(record.id, profileKey(record.browser));
     return record;
   }
 
@@ -372,8 +376,25 @@ export class HumanInterventionService {
   private async find(
     id: string,
   ): Promise<{ key: string; record: HumanInterventionRecord } | undefined> {
+    const key = this.locatedKeys.get(id);
+    if (key !== undefined) {
+      const record = await this.store.lookup(key);
+      if (record?.id === id) {
+        return { key, record };
+      }
+      this.locatedKeys.delete(id);
+    }
     const entry = (await this.store.entries()).find((candidate) => candidate.value.id === id);
+    if (entry) this.rememberLocation(id, entry.key);
     return entry ? { key: entry.key, record: entry.value } : undefined;
+  }
+
+  private rememberLocation(id: string, key: string): void {
+    if (this.locatedKeys.size >= MAX_LOCATED_IDS && !this.locatedKeys.has(id)) {
+      const oldest = this.locatedKeys.keys().next().value;
+      if (oldest !== undefined) this.locatedKeys.delete(oldest);
+    }
+    this.locatedKeys.set(id, key);
   }
 
   private async transitionById(

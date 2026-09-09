@@ -1,5 +1,5 @@
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   HumanInterventionConflictError,
   HumanInterventionService,
@@ -73,6 +73,35 @@ function request(service: HumanInterventionService, overrides = {}) {
 }
 
 describe("HumanInterventionService", () => {
+  it("uses direct reads after locating an ID and observes another writer's updates", async () => {
+    const store = createMemoryStore();
+    const first = new HumanInterventionService(store);
+    const pending = await request(first);
+    const reader = new HumanInterventionService(store);
+    const entries = vi.spyOn(store, "entries");
+    await reader.get(pending.id);
+    const scans = entries.mock.calls.length;
+    await first.claim({ id: pending.id, controllerId: "phone-a" });
+    await expect(reader.get(pending.id)).resolves.toMatchObject({ state: "control" });
+    await expect(reader.get(pending.id)).resolves.toMatchObject({ controllerId: "phone-a" });
+    expect(entries).toHaveBeenCalledTimes(scans);
+  });
+
+  it("never resolves a cached old ID to a replacement handoff on the same profile", async () => {
+    const store = createMemoryStore();
+    const writer = new HumanInterventionService(store);
+    const first = await request(writer);
+    const reader = new HumanInterventionService(store);
+    await reader.get(first.id);
+    await writer.cancel(first.id);
+    const replacement = await request(writer);
+    await expect(reader.get(first.id)).rejects.toThrow("not found");
+    await expect(reader.get(replacement.id)).resolves.toMatchObject({
+      id: replacement.id,
+      state: "waiting",
+    });
+  });
+
   it("checks the handoff deadline when a queued claim actually commits", async () => {
     const store = createMemoryStore();
     let now = 1_000;
