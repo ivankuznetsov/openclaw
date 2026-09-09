@@ -259,7 +259,6 @@ internal fun resolvePendingAssistantAutoSend(
 }
 
 internal enum class ChatComposerPrimaryAction {
-  StartTalk,
   None,
   Stop,
   Send,
@@ -275,7 +274,7 @@ internal fun resolveChatComposerPrimaryAction(
     hasContent && !talkActive -> ChatComposerPrimaryAction.Send
     runActive -> ChatComposerPrimaryAction.Stop
     talkActive -> ChatComposerPrimaryAction.None
-    else -> ChatComposerPrimaryAction.StartTalk
+    else -> ChatComposerPrimaryAction.None
   }
 
 internal object ChatUserMessageDisclosurePolicy {
@@ -534,6 +533,12 @@ internal fun ChatScreen(
         viewModel.isCurrentChatComposerOwner(expected)
       }
     }
+  val attachmentPicker =
+    remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
+      ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
+        viewModel.isCurrentChatComposerOwner(expected)
+      }
+    }
   val branchPicker =
     remember(viewModel, pickerActivity, pickerView, lifecycleOwner) {
       ChatModelPickerSessionOwner(pickerActivity, pickerView, lifecycleOwner.lifecycle) { expected ->
@@ -556,20 +561,23 @@ internal fun ChatScreen(
     effortPicker.publishFeatures(publication)
     backgroundTasks.publishFeatures(publication)
     branchPicker.publishFeatures(publication)
+    attachmentPicker.publishFeatures(publication)
   }
   SideEffect {
     modelPicker.refreshTarget()
     effortPicker.refreshTarget()
     backgroundTasks.refreshTarget()
     branchPicker.refreshTarget()
+    attachmentPicker.refreshTarget()
     branchOpening?.let { isCurrentBranchOpening(it) }
   }
-  DisposableEffect(modelPicker, effortPicker, backgroundTasks, branchPicker) {
+  DisposableEffect(modelPicker, effortPicker, backgroundTasks, branchPicker, attachmentPicker) {
     onDispose {
       modelPicker.dispose()
       effortPicker.dispose()
       backgroundTasks.dispose()
       branchPicker.dispose()
+      attachmentPicker.dispose()
     }
   }
   var detailsExpanded by rememberSaveable { mutableStateOf(false) }
@@ -629,37 +637,38 @@ internal fun ChatScreen(
   val dictationState by dictationController.state.collectAsState()
   val dictationActive =
     dictationState is ChatDictationState.Starting || dictationState is ChatDictationState.Listening
-  val pickImages =
-    rememberLauncherForActivityResult(ActivityResultContracts.GetMultipleContents()) { uris ->
-      val lease = imagePickerOwnerCheckpoint.consume() ?: return@rememberLauncherForActivityResult
-      if (uris.isNullOrEmpty()) {
-        composerState.cancelMediaAcquisition(lease.authorizationId)
-        return@rememberLauncherForActivityResult
-      }
-      val importOwner =
-        if (shouldMigrateComposerDraft(lease.owner, currentPickerOwner, currentPickerMainSessionKey)) {
-          currentPickerOwner
-        } else {
-          lease.owner
+
+  fun importGalleryMedia(
+    lease: ChatComposerMediaLease,
+    uris: List<android.net.Uri>,
+  ) {
+    if (uris.isEmpty()) {
+      composerState.cancelMediaAcquisition(lease.authorizationId)
+      return
+    }
+    val importOwner =
+      if (shouldMigrateComposerDraft(lease.owner, currentPickerOwner, currentPickerMainSessionKey)) currentPickerOwner else lease.owner
+    viewModel.importChatComposerAttachments(
+      owner = importOwner,
+      mediaAuthorizationId = lease.authorizationId,
+      mainSessionKey = currentPickerMainSessionKey,
+      expectedCount = uris.size,
+    ) {
+      uris.take(CHAT_COMPOSER_MAX_ATTACHMENTS).mapNotNull { uri ->
+        try {
+          loadPickedMediaOrDocumentAttachment(resolver, uri)
+        } catch (err: CancellationException) {
+          throw err
+        } catch (_: Exception) {
+          null
         }
-      val selectedUris = uris.take(8)
-      viewModel.importChatComposerAttachments(
-        owner = importOwner,
-        mediaAuthorizationId = lease.authorizationId,
-        mainSessionKey = currentPickerMainSessionKey,
-        expectedCount = uris.size,
-      ) {
-        selectedUris
-          .mapNotNull { uri ->
-            try {
-              loadSizedImageAttachment(resolver, uri)
-            } catch (err: CancellationException) {
-              throw err
-            } catch (_: Throwable) {
-              null
-            }
-          }
       }
+    }
+  }
+  val pickImages =
+    rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(CHAT_COMPOSER_MAX_ATTACHMENTS)) { uris ->
+      val lease = imagePickerOwnerCheckpoint.consume() ?: return@rememberLauncherForActivityResult
+      importGalleryMedia(lease, uris)
     }
   val pickMediaOrDocument =
     rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
@@ -1043,24 +1052,7 @@ internal fun ChatScreen(
       commands = chatCommands,
       onOpenEffortPicker = { effortPicker.open(composerOwner, sessionKey) },
       onOpenModelPicker = { modelPicker.open(composerOwner, sessionKey) },
-      onPickImages = {
-        if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
-        val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
-        imagePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
-        pickImages.launch("image/*")
-      },
-      onPickAudioOrDocument = {
-        if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
-        val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
-        filePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
-        pickMediaOrDocument.launch(SHARED_AUDIO_DOCUMENT_MIME_TYPES)
-      },
-      onPickVideo = {
-        if (!viewModel.isCurrentChatComposerOwner(composerOwner)) return@ChatComposer
-        val authorizationId = composerState.beginMediaAcquisition(composerOwner) ?: return@ChatComposer
-        filePickerOwnerCheckpoint.begin(composerOwner, authorizationId)
-        pickMediaOrDocument.launch(SHARED_VIDEO_MIME_TYPES)
-      },
+      onOpenAttachments = { attachmentPicker.open(composerOwner, sessionKey) },
       onRemoveAttachment = { id -> composerState.removeAttachments(composerOwner, setOf(id)) },
       voiceNoteState = voiceNoteState,
       voiceNoteElapsedMs = voiceNoteElapsedMs,
@@ -1157,6 +1149,67 @@ internal fun ChatScreen(
         sendCheckpointFull = result == ChatComposerSendStartResult.CheckpointFull
       },
     )
+  }
+
+  attachmentPicker.visible?.let { opening ->
+    key(opening) {
+      ChatAttachmentSheet(
+        opening = opening,
+        admit = { attachmentPicker.admit(opening) },
+        onDismiss = { attachmentPicker.retire(opening) },
+        onSelectMedia = { uris ->
+          if (attachmentPicker.admit(opening)) {
+            val owner = opening.composerOwner
+            val authorizationId = composerState.beginMediaAcquisition(owner)
+            if (authorizationId != null) importGalleryMedia(ChatComposerMediaLease(owner, authorizationId), uris)
+            attachmentPicker.retire(opening)
+            authorizationId != null
+          } else {
+            false
+          }
+        },
+        onBrowseGallery = {
+          if (attachmentPicker.admit(opening)) {
+            val owner = opening.composerOwner
+            val authorizationId = composerState.beginMediaAcquisition(owner)
+            if (authorizationId != null) {
+              imagePickerOwnerCheckpoint.begin(owner, authorizationId)
+              pickImages.launch(androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo))
+            }
+            attachmentPicker.retire(opening)
+          }
+        },
+        onPickFile = {
+          if (attachmentPicker.admit(opening)) {
+            val owner = opening.composerOwner
+            val authorizationId = composerState.beginMediaAcquisition(owner)
+            if (authorizationId != null) {
+              filePickerOwnerCheckpoint.begin(owner, authorizationId)
+              pickMediaOrDocument.launch(SHARED_AUDIO_DOCUMENT_MIME_TYPES)
+            }
+            attachmentPicker.retire(opening)
+          }
+        },
+        onPickVideo = {
+          if (attachmentPicker.admit(opening)) {
+            val owner = opening.composerOwner
+            val authorizationId = composerState.beginMediaAcquisition(owner)
+            if (authorizationId != null) {
+              filePickerOwnerCheckpoint.begin(owner, authorizationId)
+              pickMediaOrDocument.launch(SHARED_VIDEO_MIME_TYPES)
+            }
+            attachmentPicker.retire(opening)
+          }
+        },
+        onLocation = { location ->
+          if (attachmentPicker.admit(opening)) {
+            val owner = opening.composerOwner
+            inputDrafts[owner] = mergeSharedChatText(location, inputDrafts[owner])
+            attachmentPicker.retire(opening)
+          }
+        },
+      )
+    }
   }
 
   effortPicker.visible?.let { opening ->
@@ -2686,7 +2739,10 @@ private fun minimumChatLineHeight(style: TextStyle): Int {
 
 @Composable
 private fun minimumChatInputHeight(): Dp {
-  val lineHeight = minimumChatLineHeight(chatDraftStyle())
+  val style = chatDraftStyle()
+  val wrapped = rememberTextMeasurer().measure("H\nH", style = style)
+  // Multiline paragraph rounding can make a line one pixel taller than a single-line measurement.
+  val lineHeight = maxOf(minimumChatLineHeight(style), ceil(wrapped.getLineBottom(0) - wrapped.getLineTop(0)).toInt())
   return with(LocalDensity.current) {
     // Match each separately rounded editor/action padding and the text's full pixel line.
     (
@@ -2728,9 +2784,7 @@ private fun ChatComposer(
   commands: List<ChatCommandEntry>,
   onOpenEffortPicker: () -> Unit,
   onOpenModelPicker: () -> Unit,
-  onPickImages: () -> Unit,
-  onPickAudioOrDocument: () -> Unit,
-  onPickVideo: () -> Unit,
+  onOpenAttachments: () -> Unit,
   onRemoveAttachment: (String) -> Unit,
   voiceNoteState: VoiceNoteRecorderState,
   voiceNoteElapsedMs: Long,
@@ -2877,9 +2931,7 @@ private fun ChatComposer(
             onOpenDetails = if (compactHeight) ({ onDetailsExpandedChange(true) }) else null,
             value = value,
             onValueChange = onValueChange,
-            onPickImages = onPickImages,
-            onPickAudioOrDocument = onPickAudioOrDocument,
-            onPickVideo = onPickVideo,
+            onOpenAttachments = onOpenAttachments,
             onStartVoiceNote = onStartVoiceNote,
             recordVoiceNoteEnabled = recordVoiceNoteEnabled,
             dictationActive = dictationActive,
@@ -3753,9 +3805,7 @@ private fun ChatInputPill(
   onOpenDetails: (() -> Unit)?,
   value: String,
   onValueChange: (String) -> Unit,
-  onPickImages: () -> Unit,
-  onPickAudioOrDocument: () -> Unit,
-  onPickVideo: () -> Unit,
+  onOpenAttachments: () -> Unit,
   onStartVoiceNote: () -> Unit,
   recordVoiceNoteEnabled: Boolean,
   dictationActive: Boolean,
@@ -3782,7 +3832,7 @@ private fun ChatInputPill(
   modifier: Modifier = Modifier,
 ) {
   val hardwareEnterHandler = remember { PhysicalChatSendKeyHandler() }
-  var attachmentMenuExpanded by remember { mutableStateOf(false) }
+  var voiceOptionsExpanded by remember { mutableStateOf(false) }
   val draftStyle = chatDraftStyle()
 
   Surface(
@@ -3794,50 +3844,87 @@ private fun ChatInputPill(
     shadowElevation = 1.dp,
   ) {
     Column {
-      ChatTextFieldValueAdapter(
-        value = value,
-        onValueChange = onValueChange,
-        keyHandler = hardwareEnterHandler,
-      ) { textFieldValue, updateTextFieldValue ->
-        BasicTextField(
-          value = textFieldValue,
-          enabled = inputEnabled,
-          // A pending IME callback must not edit the draft behind Details.
-          onValueChange = { if (inputEnabled) updateTextFieldValue(it) },
-          textStyle = draftStyle.copy(color = ClawTheme.colors.text),
-          cursorBrush = SolidColor(ClawTheme.colors.primary),
-          minLines = 1,
-          maxLines = 6,
-          modifier =
-            Modifier
-              .fillMaxWidth()
-              // Reserve the action row before measuring the draft in the IME viewport.
-              .weight(1f, fill = false)
-              .heightIn(min = ClawTheme.spacing.touchTarget)
-              .padding(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 4.dp)
-              .onPreInterceptKeyBeforeSoftKeyboard { event ->
-                inputEnabled &&
-                  hardwareEnterHandler.handle(
-                    event = event,
-                    sendEnabled = sendEnabled,
-                    textEmpty = textFieldValue.text.isEmpty(),
-                    compositionActive = textFieldValue.composition != null,
-                    onSend = onSend,
-                  )
-              },
-          decorationBox = { innerTextField ->
-            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
-              if (value.isEmpty()) {
-                // BasicTextField's line limit does not constrain its decoration.
-                Text(text = nativeString("Message OpenClaw"), style = draftStyle, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+      Row(
+        modifier = Modifier.fillMaxWidth().weight(1f, fill = false).padding(horizontal = 4.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+      ) {
+        IconButton(onClick = onOpenAttachments, enabled = inputEnabled, modifier = Modifier.size(ClawTheme.spacing.touchTarget)) {
+          Icon(Icons.Default.Add, contentDescription = nativeString("Add attachment"), modifier = Modifier.size(20.dp))
+        }
+        ChatTextFieldStateAdapter(
+          value = value,
+          onValueChange = onValueChange,
+          keyHandler = hardwareEnterHandler,
+        ) { textFieldState, inputTransformation ->
+          BasicTextField(
+            state = textFieldState,
+            enabled = inputEnabled,
+            // A pending IME callback must not edit the draft behind Details.
+            inputTransformation = inputTransformation,
+            textStyle = draftStyle.copy(color = ClawTheme.colors.text),
+            cursorBrush = SolidColor(ClawTheme.colors.primary),
+            lineLimits =
+              androidx.compose.foundation.text.input.TextFieldLineLimits
+                .MultiLine(maxHeightInLines = 6),
+            modifier =
+              Modifier
+                .weight(1f)
+                .heightIn(min = ClawTheme.spacing.touchTarget)
+                .padding(start = 4.dp, end = 4.dp, top = 8.dp, bottom = 4.dp)
+                .onPreInterceptKeyBeforeSoftKeyboard { event ->
+                  inputEnabled &&
+                    hardwareEnterHandler.handle(
+                      event = event,
+                      sendEnabled = sendEnabled,
+                      textEmpty = textFieldState.text.isEmpty(),
+                      compositionActive = textFieldState.composition != null,
+                      onSend = onSend,
+                    )
+                },
+            decorator = { innerTextField ->
+              Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.CenterStart) {
+                if (value.isEmpty()) {
+                  // BasicTextField's line limit does not constrain its decoration.
+                  Text(text = if (dictationActive) nativeString("Listening…") else nativeString("Message OpenClaw"), style = draftStyle, color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                }
+                innerTextField()
               }
-              innerTextField()
-            }
-          },
-        )
+            },
+          )
+        }
+
+        if (talkActive) {
+          LiveTalkButton(active = true, onClick = onToggleTalk)
+        } else {
+          Box {
+            ChatComposerMicButton(
+              dictationActive = dictationActive,
+              dictationEnabled = dictationEnabled,
+              voiceNoteEnabled = recordVoiceNoteEnabled,
+              onToggleDictation = onToggleDictation,
+              onStartVoiceNote = onStartVoiceNote,
+              onOpenVoiceOptions = { voiceOptionsExpanded = true },
+            )
+            FoldAwareDropdownMenu(
+              expanded = voiceOptionsExpanded,
+              onDismissRequest = { voiceOptionsExpanded = false },
+              items =
+                buildList {
+                  if (dictationEnabled) add(FoldAwareMenuItem("dictation", nativeString("Dictation"), onToggleDictation, Icons.Default.Mic))
+                  if (recordVoiceNoteEnabled) add(FoldAwareMenuItem("voice-note", voiceNoteRecordLabel(), onStartVoiceNote, Icons.Default.Mic))
+                  add(FoldAwareMenuItem("talk", nativeString("Start Talk"), onToggleTalk, Icons.Default.Mic))
+                },
+            )
+          }
+        }
+        when (resolveChatComposerPrimaryAction(talkActive = talkActive, runActive = runActive, hasContent = hasContent)) {
+          ChatComposerPrimaryAction.Send -> SendButton(enabled = inputEnabled && sendEnabled, onClick = onSend)
+          ChatComposerPrimaryAction.Stop -> StopButton(onClick = onAbort)
+          ChatComposerPrimaryAction.None -> Unit
+        }
       }
       Row(
-        modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
       ) {
         if (onOpenDetails != null) {
@@ -3845,59 +3932,45 @@ private fun ChatInputPill(
             Icon(Icons.Default.MoreVert, contentDescription = nativeString("Details"))
           }
         }
-        Box {
-          Surface(onClick = { attachmentMenuExpanded = true }, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.textMuted) {
-            Box(contentAlignment = Alignment.Center) {
-              Icon(imageVector = Icons.Default.Add, contentDescription = nativeString("Add attachment"), modifier = Modifier.size(20.dp))
-            }
+        ChatComposerModelPicker(
+          label = selectedModelLabel,
+          contextUsage = contextUsage,
+          enabled = modelPickerEnabled,
+          onClick = onOpenModelPicker,
+          modifier = Modifier.weight(1f),
+        )
+        if (thinkingSupported || fastModeEnabled || fastMode) {
+          ChatThinkingLevelPicker(
+            options = thinkingOptions,
+            selectedId = thinkingLevel,
+            thinkingSupported = thinkingSupported,
+            thinkingLevelEnabled = thinkingLevelEnabled,
+            fastMode = fastMode,
+            fastModeEnabled = fastModeEnabled,
+            onOpen = onOpenEffortPicker,
+          )
+        }
+        val fraction = contextMeterWidth(contextUsage)
+        val summary = chatContextSummary(contextUsage)
+        Row(
+          Modifier.weight(1f).padding(horizontal = 8.dp).semantics {
+            contentDescription = nativeString("Context")
+            summary?.let { stateDescription = it.detail }
+          },
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            text = fraction?.let { nativeString("Context \$percent", "${(it * 100).toInt()}%") } ?: nativeString("Context –"),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+          )
+          Box(Modifier.width(36.dp).height(3.dp).background(ClawTheme.colors.borderStrong, CircleShape)) {
+            if (fraction != null) Box(Modifier.fillMaxWidth(fraction).height(3.dp).background(ClawTheme.colors.primary, CircleShape))
           }
-          FoldAwareDropdownMenu(
-            expanded = attachmentMenuExpanded,
-            onDismissRequest = { attachmentMenuExpanded = false },
-            items =
-              listOf(
-                FoldAwareMenuItem("photos", nativeString("Photos"), onPickImages, Icons.Default.Photo),
-                FoldAwareMenuItem("videos", nativeString("Videos"), onPickVideo, Icons.Default.Videocam),
-                FoldAwareMenuItem("files", nativeString("Files"), onPickAudioOrDocument, Icons.Default.AttachFile),
-              ),
-          )
-        }
-        Row(modifier = Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
-          ChatComposerModelPicker(
-            label = selectedModelLabel,
-            contextUsage = contextUsage,
-            enabled = modelPickerEnabled,
-            onClick = onOpenModelPicker,
-            modifier = Modifier.weight(1f, fill = false),
-          )
-          if (thinkingSupported || fastModeEnabled || fastMode) {
-            ChatThinkingLevelPicker(
-              options = thinkingOptions,
-              selectedId = thinkingLevel,
-              thinkingSupported = thinkingSupported,
-              thinkingLevelEnabled = thinkingLevelEnabled,
-              fastMode = fastMode,
-              fastModeEnabled = fastModeEnabled,
-              onOpen = onOpenEffortPicker,
-            )
-          }
-        }
-        if (talkActive) {
-          LiveTalkButton(active = true, onClick = onToggleTalk)
-        } else {
-          ChatComposerMicButton(
-            dictationActive = dictationActive,
-            dictationEnabled = dictationEnabled,
-            voiceNoteEnabled = recordVoiceNoteEnabled,
-            onToggleDictation = onToggleDictation,
-            onStartVoiceNote = onStartVoiceNote,
-          )
-        }
-        when (resolveChatComposerPrimaryAction(talkActive = talkActive, runActive = runActive, hasContent = hasContent)) {
-          ChatComposerPrimaryAction.Send -> SendButton(enabled = inputEnabled && sendEnabled, onClick = onSend)
-          ChatComposerPrimaryAction.StartTalk -> LiveTalkButton(active = false, onClick = onToggleTalk)
-          ChatComposerPrimaryAction.Stop -> StopButton(onClick = onAbort)
-          ChatComposerPrimaryAction.None -> Unit
         }
       }
     }
@@ -4181,7 +4254,7 @@ private fun StopButton(onClick: () -> Unit) {
 }
 
 @Composable
-private fun LiveTalkWaveform(
+internal fun LiveTalkWaveform(
   active: Boolean,
   modifier: Modifier = Modifier,
 ) {
