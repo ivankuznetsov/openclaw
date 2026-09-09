@@ -3939,37 +3939,39 @@ private fun ChatInputPill(
           onClick = onOpenModelPicker,
           modifier = Modifier.weight(1f),
         )
-        if (thinkingSupported || fastModeEnabled || fastMode) {
-          ChatThinkingLevelPicker(
-            options = thinkingOptions,
-            selectedId = thinkingLevel,
-            thinkingSupported = thinkingSupported,
-            thinkingLevelEnabled = thinkingLevelEnabled,
-            fastMode = fastMode,
-            fastModeEnabled = fastModeEnabled,
-            onOpen = onOpenEffortPicker,
-          )
-        }
-        val fraction = contextMeterWidth(contextUsage)
-        val summary = chatContextSummary(contextUsage)
         Row(
-          Modifier.weight(1f).padding(horizontal = 8.dp).semantics {
-            contentDescription = nativeString("Context")
-            summary?.let { stateDescription = it.detail }
-          },
+          modifier = Modifier.weight(1f),
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          horizontalArrangement = Arrangement.End,
         ) {
-          Text(
-            text = fraction?.let { nativeString("Context \$percent", "${(it * 100).toInt()}%") } ?: nativeString("Context –"),
-            style = ClawTheme.type.caption,
-            color = ClawTheme.colors.textMuted,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f),
-          )
-          Box(Modifier.width(36.dp).height(3.dp).background(ClawTheme.colors.borderStrong, CircleShape)) {
-            if (fraction != null) Box(Modifier.fillMaxWidth(fraction).height(3.dp).background(ClawTheme.colors.primary, CircleShape))
+          if (thinkingSupported || fastModeEnabled || fastMode) {
+            ChatThinkingLevelPicker(
+              options = thinkingOptions,
+              selectedId = thinkingLevel,
+              thinkingSupported = thinkingSupported,
+              thinkingLevelEnabled = thinkingLevelEnabled,
+              fastMode = fastMode,
+              fastModeEnabled = fastModeEnabled,
+              onOpen = onOpenEffortPicker,
+            )
+          }
+          val fraction = contextMeterWidth(contextUsage)
+          val summary = chatContextSummary(contextUsage)
+          Row(
+            Modifier.weight(1f, fill = false).padding(start = 4.dp, end = 8.dp).semantics {
+              contentDescription = nativeString("Context")
+              summary?.let { stateDescription = it.detail }
+            },
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.End,
+          ) {
+            Text(
+              text = fraction?.let { nativeString("Context \$percent", "${(it * 100).toInt()}%") } ?: nativeString("Context –"),
+              style = ClawTheme.type.caption,
+              color = ClawTheme.colors.textMuted,
+              maxLines = 1,
+              overflow = TextOverflow.Ellipsis,
+            )
           }
         }
       }
