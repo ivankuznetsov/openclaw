@@ -1511,7 +1511,20 @@
                       "channels/matrix-push-rules"
                     ]
                   },
-                  "channels/msteams",
+                  {
+                    "group": "Microsoft Teams",
+                    "pages": [
+                      "channels/msteams",
+                      "channels/msteams/setup",
+                      "channels/msteams/access-control",
+                      "channels/msteams/authentication",
+                      "channels/msteams/manifest-and-permissions",
+                      "channels/msteams/configuration",
+                      "channels/msteams/messaging",
+                      "channels/msteams/cards-and-actions",
+                      "channels/msteams/troubleshooting"
+                    ]
+                  },
                   "channels/signal",
                   {
                     "group": "Slack",
@@ -1531,7 +1544,22 @@
                     ]
                   },
                   "channels/sms",
-                  "channels/telegram",
+                  {
+                    "group": "Telegram",
+                    "pages": [
+                      "channels/telegram",
+                      "channels/telegram/setup",
+                      "channels/telegram/access-control",
+                      "channels/telegram/messaging",
+                      "channels/telegram/threads-and-sessions",
+                      "channels/telegram/rich-messages",
+                      "channels/telegram/media",
+                      "channels/telegram/events",
+                      "channels/telegram/transports",
+                      "channels/telegram/mini-app",
+                      "channels/telegram/troubleshooting"
+                    ]
+                  },
                   "channels/whatsapp"
                 ]
               },
@@ -1952,6 +1980,18 @@
                   "tools/subagents",
                   "tools/swarm",
                   "tools/acp-agents",
+                  {
+                    "group": "ACP agents",
+                    "pages": [
+                      "tools/acp-agents/quickstart",
+                      "tools/acp-agents/runbook",
+                      "tools/acp-agents/bindings",
+                      "tools/acp-agents/sessions",
+                      "tools/acp-agents/delivery",
+                      "tools/acp-agents/controls",
+                      "tools/acp-agents/troubleshooting"
+                    ]
+                  },
                   "tools/acp-agents-setup",
                   "tools/multi-agent-sandbox-tools"
                 ]
@@ -2568,8 +2608,30 @@
                     "group": "Plugins and skills",
                     "pages": [
                       "cli/plugins",
+                      {
+                        "group": "Plugins CLI",
+                        "pages": [
+                          "cli/plugins/authoring",
+                          "cli/plugins/install",
+                          "cli/plugins/list",
+                          "cli/plugins/uninstall-and-update",
+                          "cli/plugins/inspect-and-diagnose",
+                          "cli/plugins/marketplace"
+                        ]
+                      },
                       "cli/path",
                       "cli/policy",
+                      {
+                        "group": "Policy",
+                        "pages": [
+                          "cli/policy/authoring",
+                          "cli/policy/rules",
+                          "cli/policy/scopes",
+                          "cli/policy/running-checks",
+                          "cli/policy/attestation",
+                          "cli/policy/findings"
+                        ]
+                      },
                       "cli/skills",
                       "cli/workboard"
                     ]
