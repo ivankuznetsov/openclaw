@@ -3932,18 +3932,17 @@ private fun ChatInputPill(
             Icon(Icons.Default.MoreVert, contentDescription = nativeString("Details"))
           }
         }
-        ChatComposerModelPicker(
-          label = selectedModelLabel,
-          contextUsage = contextUsage,
-          enabled = modelPickerEnabled,
-          onClick = onOpenModelPicker,
-          modifier = Modifier.weight(1f),
-        )
         Row(
           modifier = Modifier.weight(1f),
           verticalAlignment = Alignment.CenterVertically,
-          horizontalArrangement = Arrangement.End,
         ) {
+          ChatComposerModelPicker(
+            label = selectedModelLabel,
+            contextUsage = contextUsage,
+            enabled = modelPickerEnabled,
+            onClick = onOpenModelPicker,
+            modifier = Modifier.weight(1f, fill = false),
+          )
           if (thinkingSupported || fastModeEnabled || fastMode) {
             ChatThinkingLevelPicker(
               options = thinkingOptions,
@@ -3955,23 +3954,28 @@ private fun ChatInputPill(
               onOpen = onOpenEffortPicker,
             )
           }
-          val fraction = contextMeterWidth(contextUsage)
-          val summary = chatContextSummary(contextUsage)
-          Row(
-            Modifier.weight(1f, fill = false).padding(start = 4.dp, end = 8.dp).semantics {
-              contentDescription = nativeString("Context")
-              summary?.let { stateDescription = it.detail }
-            },
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.End,
-          ) {
-            Text(
-              text = fraction?.let { nativeString("Context \$percent", "${(it * 100).toInt()}%") } ?: nativeString("Context –"),
-              style = ClawTheme.type.caption,
-              color = ClawTheme.colors.textMuted,
-              maxLines = 1,
-              overflow = TextOverflow.Ellipsis,
-            )
+        }
+        val fraction = contextMeterWidth(contextUsage)
+        val summary = chatContextSummary(contextUsage)
+        Row(
+          Modifier.weight(1f).padding(horizontal = 8.dp).semantics {
+            contentDescription = nativeString("Context")
+            summary?.let { stateDescription = it.detail }
+          },
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+          Text(
+            text = fraction?.let { nativeString("Context \$percent", "${(it * 100).toInt()}%") } ?: nativeString("Context –"),
+            style = ClawTheme.type.caption,
+            color = ClawTheme.colors.textMuted,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.End,
+            modifier = Modifier.weight(1f),
+          )
+          Box(Modifier.width(36.dp).height(3.dp).background(ClawTheme.colors.borderStrong, CircleShape)) {
+            if (fraction != null) Box(Modifier.fillMaxWidth(fraction).height(3.dp).background(ClawTheme.colors.primary, CircleShape))
           }
         }
       }
