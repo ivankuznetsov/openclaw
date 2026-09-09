@@ -554,7 +554,6 @@ describe("doctor Tailscale pairing preflight runtime evidence", () => {
     expect(probe).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "wss://node.tail.ts.net:18789",
-        includeDetails: false,
         detailLevel: "none",
         suppressStoredDeviceAuth: true,
         auth: undefined,

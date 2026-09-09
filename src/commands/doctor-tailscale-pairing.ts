@@ -216,6 +216,7 @@ export async function collectTailscalePairingHealthFindings(
       return findings;
     }
 
+    const target = pairingTarget(url);
     const remoteTlsFingerprint =
       pairingUrl.source === "gateway.remote.url"
         ? params.cfg.gateway?.remote?.tlsFingerprint
@@ -228,16 +229,15 @@ export async function collectTailscalePairingHealthFindings(
           fetchFn: params.fetchFn ?? fetch,
         }),
         (params.probeGateway ?? probeGatewayEndpoint)({
-          url: pairingTarget(url),
+          url: target,
           timeoutMs,
-          includeDetails: false,
           detailLevel: "none",
           suppressStoredDeviceAuth: true,
           auth: undefined,
           config: remoteTlsFingerprint
             ? {
                 gateway: {
-                  remote: { url: pairingTarget(url), tlsFingerprint: remoteTlsFingerprint },
+                  remote: { url: target, tlsFingerprint: remoteTlsFingerprint },
                 },
               }
             : {},
