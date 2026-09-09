@@ -48,8 +48,12 @@ const TailscaleServeConfigSchema = z.object({
   AllowFunnel: z.record(z.string(), z.boolean()).optional(),
 });
 
-const TailscaleServeStatusSchema = TailscaleServeConfigSchema.extend({
-  Foreground: z.record(z.string(), TailscaleServeConfigSchema).optional(),
+const TailscaleServeObservationConfigSchema = TailscaleServeConfigSchema.extend({
+  Services: z.record(z.string(), TailscaleServeConfigSchema).optional(),
+});
+
+const TailscaleServeStatusSchema = TailscaleServeObservationConfigSchema.extend({
+  Foreground: z.record(z.string(), TailscaleServeObservationConfigSchema).optional(),
 });
 
 export type TailscaleServeRouteObservation = {
@@ -97,7 +101,7 @@ function extractTailscaleServeRouteObservations(
   const configs: Array<{
     management: TailscaleServeRouteObservation["management"];
     session?: string;
-    config: z.infer<typeof TailscaleServeConfigSchema>;
+    config: z.infer<typeof TailscaleServeObservationConfigSchema>;
   }> = [{ management: "background", config: status }];
   for (const [session, config] of Object.entries(status.Foreground ?? {})) {
     configs.push({
@@ -107,6 +111,11 @@ function extractTailscaleServeRouteObservations(
     });
   }
 
+  for (const { config, management, session } of configs.slice()) {
+    for (const service of Object.values(config.Services ?? {})) {
+      configs.push({ management, session, config: service });
+    }
+  }
   const routes: TailscaleServeRouteObservation[] = [];
   for (const entry of configs) {
     for (const [hostPort, server] of Object.entries(entry.config.Web ?? {})) {

@@ -10,6 +10,46 @@ import {
 } from "./tailscale-status.js";
 
 describe("shared/tailscale-status", () => {
+  it.each(["background", "foreground"] as const)(
+    "observes %s named-service routes without adopting them",
+    async (management) => {
+      const config = {
+        Services: {
+          "svc:gateway": {
+            TCP: { "443": { HTTPS: true } },
+            Web: {
+              "gateway.tail.ts.net:443": {
+                Handlers: { "/": { Proxy: "http://127.0.0.1:18789" } },
+              },
+            },
+          },
+        },
+      };
+      const raw = JSON.stringify(
+        management === "foreground" ? { Foreground: { session: config } } : config,
+      );
+
+      await expect(
+        inspectTailscaleServeRoutesWithRunner(vi.fn().mockResolvedValue({ code: 0, stdout: raw })),
+      ).resolves.toEqual({
+        status: "ok",
+        routes: [
+          {
+            management,
+            ...(management === "foreground" ? { session: "session" } : {}),
+            host: "gateway.tail.ts.net",
+            port: 443,
+            path: "/",
+            target: "http://127.0.0.1:18789",
+            funnel: false,
+          },
+        ],
+      });
+      expect(extractTailscaleServeGatewayUrls(raw, 18789)).toEqual([]);
+      expect(extractTailscaleServeGatewayUrls(raw, 18789, true)).toEqual([]);
+    },
+  );
+
   it("observes background and foreground HTTPS routes without granting ownership", async () => {
     const fixturePassword = ["example", "password", "not-real"].join("-");
     const fixtureToken = ["example", "token", "not-real"].join("-");
