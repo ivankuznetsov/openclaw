@@ -54,11 +54,46 @@ function effectivePort(url: URL): number {
 }
 
 function routeCoversPath(routePath: string, requestPath: string): boolean {
-  if (routePath === "/") {
+  const mount = routePath === "/" ? routePath : routePath.replace(/\/$/u, "");
+  if (mount === "/") {
     return true;
   }
-  const mount = routePath.endsWith("/") ? routePath.slice(0, -1) : routePath;
   return requestPath === mount || requestPath.startsWith(`${mount}/`);
+}
+
+function selectEffectiveRoutes(
+  routes: TailscaleServeRouteObservation[],
+  requestPath: string,
+): TailscaleServeRouteObservation[] {
+  const coveringRoutes = routes.filter((route) => routeCoversPath(route.path, requestPath));
+  if (coveringRoutes.length < 2) {
+    return coveringRoutes;
+  }
+  const routeSpecificity = (route: TailscaleServeRouteObservation) =>
+    route.path === "/" ? 1 : route.path.replace(/\/$/u, "").length;
+  const mostSpecificPathLength = Math.max(...coveringRoutes.map(routeSpecificity));
+  return coveringRoutes.filter((route) => routeSpecificity(route) === mostSpecificPathLength);
+}
+
+function parseTailscaleProxyTarget(raw: string): URL | null {
+  const trimmed = raw.trim();
+  const normalized = /^\d+$/u.test(trimmed)
+    ? `http://127.0.0.1:${trimmed}`
+    : /^https\+insecure:\/\//iu.test(trimmed)
+      ? trimmed.replace(/^https\+insecure:/iu, "https:")
+      : trimmed.includes("://")
+        ? trimmed
+        : `http://${trimmed}`;
+  try {
+    const target = new URL(normalized);
+    return (target.protocol === "http:" || target.protocol === "https:") &&
+      !target.username &&
+      !target.password
+      ? target
+      : null;
+  } catch {
+    return null;
+  }
 }
 
 function gatewayRouteLoopbackHost(
@@ -69,9 +104,11 @@ function gatewayRouteLoopbackHost(
   if (!route.target) {
     return null;
   }
-  const raw = route.target.includes("://") ? route.target : `http://${route.target}`;
   try {
-    const target = new URL(raw);
+    const target = parseTailscaleProxyTarget(route.target);
+    if (!target) {
+      return null;
+    }
     const host = target.hostname.replace(/^\[|\]$/g, "").toLowerCase();
     const loopback = host === "localhost" || host === "::1" || /^127(?:\.\d{1,3}){3}$/.test(host);
     const expectedProtocol = gatewayTlsEnabled ? "https:" : "http:";
@@ -131,7 +168,12 @@ export function collectTailscalePairingConfigurationFindings(
   }
 
   const target = pairingTarget(url);
-  const mobileUrlError = validateMobilePairingUrl(target, params.pairingUrl.source);
+  const normalizedHost = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  const mobileUrlError =
+    validateMobilePairingUrl(target, params.pairingUrl.source) ??
+    (url.protocol === "ws:" && isTailnetIPv6(normalizedHost)
+      ? "Mobile pairing over a Tailscale IPv6 address requires a secure gateway URL (wss://)."
+      : null);
   if (mobileUrlError) {
     findings.push({
       checkId: TAILSCALE_PAIRING_CHECK_ID,
@@ -191,11 +233,11 @@ export function collectTailscalePairingConfigurationFindings(
 
   const port = effectivePort(url);
   const path = url.pathname || "/";
-  const authorityRoutes = params.serveInspection.routes.filter(
-    (route) =>
-      route.host === url.hostname.toLowerCase() &&
-      route.port === port &&
-      routeCoversPath(route.path, path),
+  const authorityRoutes = selectEffectiveRoutes(
+    params.serveInspection.routes.filter(
+      (route) => route.host === url.hostname.toLowerCase() && route.port === port,
+    ),
+    path,
   );
   if (authorityRoutes.length === 0) {
     if (tailscaleRelevant) {
@@ -232,6 +274,21 @@ export function collectTailscalePairingConfigurationFindings(
     return findings;
   }
 
+  if (configuredManagedPublication) {
+    findings.push({
+      checkId: TAILSCALE_PAIRING_CHECK_ID,
+      severity: "warning",
+      message:
+        "A matching foreground Serve claim is active, but Serve status does not identify its owning application; confirm that the running Gateway owns this claim.",
+      path: "gateway.tailscale.mode",
+      target,
+      requirement: "managed-route-owner-unverified",
+      fixHint:
+        "Confirm the managed route appeared with this Gateway process and that the endpoint reaches its isolated listener; resolve any competing foreground owner before pairing.",
+    });
+    return findings;
+  }
+
   const gatewayRoutes = authorityRoutes.flatMap((route) => {
     const loopbackHost = gatewayRouteLoopbackHost(
       route,
@@ -240,13 +297,7 @@ export function collectTailscalePairingConfigurationFindings(
     );
     return loopbackHost ? [{ loopbackHost, route }] : [];
   });
-  const managedPublication =
-    configuredManagedPublication ||
-    ((params.cfg.gateway?.tailscale?.mode ?? "off") !== "off" &&
-      port === 443 &&
-      path === "/" &&
-      authorityRoutes.some((route) => route.management === "foreground"));
-  if (!managedPublication && gatewayRoutes.length === 0) {
+  if (gatewayRoutes.length === 0) {
     findings.push({
       checkId: TAILSCALE_PAIRING_CHECK_ID,
       severity: "error",
@@ -259,70 +310,68 @@ export function collectTailscalePairingConfigurationFindings(
     return findings;
   }
 
-  if (!managedPublication) {
+  findings.push({
+    checkId: TAILSCALE_PAIRING_CHECK_ID,
+    severity: "info",
+    message:
+      "An externally managed Tailscale Serve route matches the mobile endpoint; gateway.tailscale.mode=off is a valid arrangement for this endpoint.",
+    target,
+    requirement: "external-serve-route",
+    fixHint:
+      "Keep the external route and configure only its immediate proxy trust and normal Gateway authentication.",
+  });
+
+  if ((params.cfg.gateway?.tailscale?.mode ?? "off") !== "off") {
     findings.push({
       checkId: TAILSCALE_PAIRING_CHECK_ID,
-      severity: "info",
+      severity: "warning",
       message:
-        "An externally managed Tailscale Serve route matches the mobile endpoint; gateway.tailscale.mode=off is a valid arrangement for this endpoint.",
+        "The selected mobile endpoint is externally managed while Gateway-managed Tailscale exposure is also enabled; the Gateway will attempt a separate managed listener claim.",
+      path: "gateway.tailscale.mode",
       target,
-      requirement: "external-serve-route",
+      requirement: "external-managed-mode",
       fixHint:
-        "Keep the external route and configure only its immediate proxy trust and normal Gateway authentication.",
+        "Set gateway.tailscale.mode=off if this external route is intentional, or remove the explicit public URL to use the managed endpoint.",
     });
+  }
 
-    if ((params.cfg.gateway?.tailscale?.mode ?? "off") !== "off") {
-      findings.push({
-        checkId: TAILSCALE_PAIRING_CHECK_ID,
-        severity: "warning",
-        message:
-          "The selected mobile endpoint is externally managed while Gateway-managed Tailscale exposure is also enabled; the Gateway will attempt a separate managed listener claim.",
-        path: "gateway.tailscale.mode",
-        target,
-        requirement: "external-managed-mode",
-        fixHint:
-          "Set gateway.tailscale.mode=off if this external route is intentional, or remove the explicit public URL to use the managed endpoint.",
-      });
-    }
+  const trustedProxies = params.cfg.gateway?.trustedProxies;
+  const hasUntrustedProxy = gatewayRoutes.some(({ loopbackHost }) =>
+    loopbackHost === "localhost"
+      ? !(
+          isTrustedProxyAddress("127.0.0.1", trustedProxies) ||
+          isTrustedProxyAddress("::1", trustedProxies)
+        )
+      : !isTrustedProxyAddress(loopbackHost, trustedProxies),
+  );
+  if (hasUntrustedProxy) {
+    findings.push({
+      checkId: TAILSCALE_PAIRING_CHECK_ID,
+      severity: "error",
+      message:
+        "The external Serve route reaches the ordinary Gateway through loopback, but no loopback immediate proxy is trusted; WebSocket upgrade attribution can fail even when HTTP liveness succeeds.",
+      path: "gateway.trustedProxies",
+      target,
+      requirement: "proxy-attribution",
+      fixHint:
+        "Trust only the loopback address used by the immediate Tailscale proxy and ensure it overwrites or safely rebuilds forwarded client headers.",
+    });
+  }
 
-    const trustedProxies = params.cfg.gateway?.trustedProxies;
-    const hasUntrustedProxy = gatewayRoutes.some(({ loopbackHost }) =>
-      loopbackHost === "localhost"
-        ? !(
-            isTrustedProxyAddress("127.0.0.1", trustedProxies) ||
-            isTrustedProxyAddress("::1", trustedProxies)
-          )
-        : !isTrustedProxyAddress(loopbackHost, trustedProxies),
-    );
-    if (hasUntrustedProxy) {
-      findings.push({
-        checkId: TAILSCALE_PAIRING_CHECK_ID,
-        severity: "error",
-        message:
-          "The external Serve route reaches the ordinary Gateway through loopback, but no loopback immediate proxy is trusted; WebSocket upgrade attribution can fail even when HTTP liveness succeeds.",
-        path: "gateway.trustedProxies",
-        target,
-        requirement: "proxy-attribution",
-        fixHint:
-          "Trust only the loopback address used by the immediate Tailscale proxy and ensure it overwrites or safely rebuilds forwarded client headers.",
-      });
-    }
-
-    if (
-      gatewayRoutes.some(({ route }) => route.funnel) &&
-      params.cfg.gateway?.auth?.mode === "none"
-    ) {
-      findings.push({
-        checkId: TAILSCALE_PAIRING_CHECK_ID,
-        severity: "error",
-        message:
-          "The externally managed route is public Funnel ingress while Gateway authentication is disabled.",
-        path: "gateway.auth.mode",
-        target,
-        requirement: "external-funnel-auth",
-        fixHint: "Configure token, password, or trusted-proxy authentication before using Funnel.",
-      });
-    }
+  if (
+    gatewayRoutes.some(({ route }) => route.funnel) &&
+    params.cfg.gateway?.auth?.mode === "none"
+  ) {
+    findings.push({
+      checkId: TAILSCALE_PAIRING_CHECK_ID,
+      severity: "error",
+      message:
+        "The externally managed route is public Funnel ingress while Gateway authentication is disabled.",
+      path: "gateway.auth.mode",
+      target,
+      requirement: "external-funnel-auth",
+      fixHint: "Configure token, password, or trusted-proxy authentication before using Funnel.",
+    });
   }
 
   return findings;

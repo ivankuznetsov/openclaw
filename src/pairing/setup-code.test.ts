@@ -20,7 +20,6 @@ const {
   encodePairingSetupCode,
   resolveConfiguredPairingPublicUrl,
   resolvePairingSetupFromConfig,
-  validateMobilePairingUrl,
 } = await import("./setup-code.js");
 const { issueDevicePairSetupBootstrapToken: issueDevicePairSetupBootstrapTokenMock } =
   await import("../infra/device-bootstrap.js");
@@ -29,13 +28,6 @@ const TLS_FINGERPRINT = "ab".repeat(32);
 const COLON_TLS_FINGERPRINT = (TLS_FINGERPRINT.match(/.{2}/gu)?.join(":") ?? "").toUpperCase();
 
 describe("pairing setup code", () => {
-  it("requires secure transport for Tailscale IPv6 addresses", () => {
-    expect(
-      validateMobilePairingUrl("ws://[fd7a:115c:a1e0::9]:18789", "gateway.remote.url"),
-    ).toContain("secure gateway URL");
-    expect(validateMobilePairingUrl("ws://[fd12:3456::9]:18789", "gateway.remote.url")).toBeNull();
-  });
-
   it("reads the configured public pairing URL from its owning plugin entry", () => {
     expect(
       resolveConfiguredPairingPublicUrl({

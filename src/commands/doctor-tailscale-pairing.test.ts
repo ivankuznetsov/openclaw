@@ -115,6 +115,26 @@ describe("doctor Tailscale pairing preflight configuration", () => {
     expect(result.map((entry) => entry.message).join(" ")).not.toContain("8096");
   });
 
+  it("checks only the most-specific Serve handler for the pairing path", () => {
+    const result = findings(
+      { gateway: { bind: "loopback", tailscale: { mode: "off" } } },
+      {
+        url: "wss://node.tail.ts.net:18789/mobile/connect",
+        routes: [
+          externalRoute,
+          { ...externalRoute, path: "/mobile", target: "http://127.0.0.1:8096" },
+        ],
+      },
+    );
+
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ severity: "error", requirement: "serve-route-target" }),
+      ]),
+    );
+    expect(result.some((entry) => entry.requirement === "external-serve-route")).toBe(false);
+  });
+
   it("reports a Serve handler using the wrong backend scheme", () => {
     const result = findings(
       { gateway: { bind: "loopback", tailscale: { mode: "off" } } },
@@ -148,7 +168,28 @@ describe("doctor Tailscale pairing preflight configuration", () => {
     expect(result.some((entry) => entry.requirement === "serve-route-target")).toBe(false);
   });
 
-  it("accepts a foreground managed route with its isolated backend port", () => {
+  it.each([
+    ["numeric", "18789", false],
+    ["insecure HTTPS", "https+insecure://127.0.0.1:18789", true],
+  ] as const)("normalizes the supported %s proxy target form", (_label, routeTarget, tls) => {
+    const result = findings(
+      {
+        gateway: {
+          bind: "loopback",
+          tailscale: { mode: "off" },
+          ...(tls ? { tls: { enabled: true } } : {}),
+          trustedProxies: ["127.0.0.1"],
+        },
+      },
+      { routes: [{ ...externalRoute, target: routeTarget }] },
+    );
+
+    expect(result).toEqual([
+      expect.objectContaining({ severity: "info", requirement: "external-serve-route" }),
+    ]);
+  });
+
+  it("keeps foreground ownership unverified for a configured managed route", () => {
     const result = findings(
       { gateway: { bind: "loopback", tailscale: { mode: "serve" } } },
       {
@@ -165,8 +206,12 @@ describe("doctor Tailscale pairing preflight configuration", () => {
       },
     );
 
-    expect(result.some((entry) => entry.requirement === "serve-route-target")).toBe(false);
-    expect(result.some((entry) => entry.requirement === "proxy-attribution")).toBe(false);
+    expect(result).toEqual([
+      expect.objectContaining({
+        severity: "warning",
+        requirement: "managed-route-owner-unverified",
+      }),
+    ]);
   });
 
   it("reports a managed endpoint without an active foreground claim", () => {
@@ -186,7 +231,7 @@ describe("doctor Tailscale pairing preflight configuration", () => {
     );
   });
 
-  it("recognizes a public URL that selects the managed foreground route", () => {
+  it("does not infer managed ownership for a foreground route selected by public URL", () => {
     const result = findings(
       { gateway: { bind: "loopback", tailscale: { mode: "serve" } } },
       {
@@ -202,8 +247,14 @@ describe("doctor Tailscale pairing preflight configuration", () => {
       },
     );
 
-    expect(result.some((entry) => entry.requirement === "external-serve-route")).toBe(false);
-    expect(result.some((entry) => entry.requirement === "serve-route-target")).toBe(false);
+    expect(result).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ severity: "error", requirement: "serve-route-target" }),
+      ]),
+    );
+    expect(result.some((entry) => entry.requirement === "managed-route-owner-unverified")).toBe(
+      false,
+    );
   });
 
   it("flags an insecure raw tailnet WebSocket URL", () => {
@@ -376,6 +427,9 @@ describe("doctor Tailscale pairing preflight configuration", () => {
     );
 
     expect(result.some((entry) => entry.requirement === "proxy-attribution")).toBe(false);
+    expect(result.some((entry) => entry.requirement === "managed-route-owner-unverified")).toBe(
+      true,
+    );
   });
 
   it("does not expose unrelated route details when the configured route is absent", () => {
