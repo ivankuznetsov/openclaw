@@ -364,6 +364,8 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
     publicUrl: () => resolveHumanInterventionPublicOrigin(currentConfig()) ?? "",
     basePath: () => currentConfig().gateway?.controlUi?.basePath,
     scheduleContinuation: api.session.workflow.scheduleSessionTurn,
+    onRetryError: (error) =>
+      api.logger.warn(`browser handoff continuation retry failed: ${String(error)}`),
   });
   api.registerTool(((ctx: OpenClawPluginToolContext) => {
     const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
@@ -468,7 +470,7 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
   api.registerService({
     id: "browser-human-intervention",
     start: async () => {
-      await humanInterventionCoordinator.reconcile();
+      await humanInterventionCoordinator.start();
     },
     stop: async () => {
       humanInterventionCoordinator.stop();

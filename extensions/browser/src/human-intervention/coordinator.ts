@@ -17,6 +17,7 @@ type CoordinatorOptions = {
   basePath?: string | (() => string | undefined);
   scheduleContinuation: ScheduleContinuation;
   now?: () => number;
+  onRetryError?: (error: unknown) => void;
 };
 
 type ControlAuthority = {
@@ -69,6 +70,8 @@ export class HumanInterventionCoordinator {
   private readonly handoffTails = new Map<string, Promise<void>>();
   private readonly controlAuthorities = new Map<string, ControlAuthority>();
   private readonly now: () => number;
+  private retryTimer?: ReturnType<typeof setTimeout>;
+  private stopped = false;
 
   constructor(
     readonly service: HumanInterventionService,
@@ -200,8 +203,29 @@ export class HumanInterventionCoordinator {
   }
 
   async reconcile(): Promise<void> {
+    const failures: unknown[] = [];
     for (const record of await this.service.listResumePending()) {
-      await this.admitContinuation(record);
+      if (this.stopped) {
+        break;
+      }
+      try {
+        await this.admitContinuation(record);
+      } catch (error) {
+        failures.push(error);
+      }
+    }
+    if (failures.length) {
+      throw new AggregateError(failures, "Browser handoff continuation admission failed");
+    }
+  }
+
+  async start(): Promise<void> {
+    this.stopped = false;
+    try {
+      await this.reconcile();
+    } catch (error) {
+      this.options.onRetryError?.(error);
+      this.scheduleRetry();
     }
   }
 
@@ -210,6 +234,9 @@ export class HumanInterventionCoordinator {
   }
 
   stop(): void {
+    this.stopped = true;
+    clearTimeout(this.retryTimer);
+    this.retryTimer = undefined;
     for (const id of this.controlAuthorities.keys()) {
       this.revokeControlAuthority(id);
     }
@@ -295,11 +322,43 @@ export class HumanInterventionCoordinator {
     if (existing) {
       return await existing;
     }
-    const run = this.admitContinuationOnce(record).finally(() => {
-      this.pendingAdmissions.delete(record.id);
-    });
+    const run = this.admitContinuationOnce(record)
+      .catch((error: unknown) => {
+        this.scheduleRetry();
+        throw error;
+      })
+      .finally(() => {
+        this.pendingAdmissions.delete(record.id);
+      });
     this.pendingAdmissions.set(record.id, run);
     return await run;
+  }
+
+  private scheduleRetry(): void {
+    if (this.stopped || this.retryTimer) {
+      return;
+    }
+    const timer = setTimeout(() => void this.retryContinuations(timer), 30_000);
+    timer.unref();
+    this.retryTimer = timer;
+  }
+
+  private async retryContinuations(timer: ReturnType<typeof setTimeout>): Promise<void> {
+    let failed = false;
+    try {
+      await this.reconcile();
+    } catch (error) {
+      failed = true;
+      this.options.onRetryError?.(error);
+    } finally {
+      // A stopped or restarted service no longer owns this retry.
+      if (this.retryTimer === timer) {
+        this.retryTimer = undefined;
+        if (failed) {
+          this.scheduleRetry();
+        }
+      }
+    }
   }
 
   private async admitContinuationOnce(

@@ -380,4 +380,84 @@ describe("HumanInterventionCoordinator", () => {
     expect(second).toEqual(first);
     await expect(service.get(pending.record.id)).resolves.toMatchObject({ state: "resumed" });
   });
+
+  it.each(["rejected", "unavailable", "stopped"])(
+    "retries %s continuation admission without a restart",
+    async (failure) => {
+      vi.useFakeTimers();
+      const { coordinator, scheduleContinuation, service } = createCoordinator();
+      const pending = await coordinator.request(createContext(), {
+        profile: "openclaw",
+        targetId: "tab-1",
+        reason: "Human verification required",
+        hostname: "example.com",
+      });
+      const claimed = await coordinator.claim({ id: pending.record.id, controllerId: "phone-a" });
+      if (failure !== "unavailable") {
+        scheduleContinuation.mockRejectedValueOnce(new Error("scheduler unavailable"));
+      } else {
+        scheduleContinuation.mockResolvedValueOnce(undefined);
+      }
+
+      await expect(
+        coordinator.complete({
+          id: pending.record.id,
+          controllerId: "phone-a",
+          generation: claimed.generation,
+        }),
+      ).rejects.toThrow();
+      await expect(service.get(pending.record.id)).resolves.toMatchObject({
+        state: "resume_pending",
+      });
+
+      if (failure === "stopped") {
+        coordinator.stop();
+      }
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      if (failure === "stopped") {
+        expect(scheduleContinuation).toHaveBeenCalledTimes(1);
+        await expect(service.get(pending.record.id)).resolves.toMatchObject({
+          state: "resume_pending",
+        });
+        return;
+      }
+      await expect(service.get(pending.record.id)).resolves.toMatchObject({ state: "resumed" });
+      expect(scheduleContinuation).toHaveBeenCalledTimes(2);
+      expect(scheduleContinuation.mock.calls[1]?.[0]).toEqual(
+        scheduleContinuation.mock.calls[0]?.[0],
+      );
+      coordinator.stop();
+    },
+  );
+
+  it("continues startup reconciliation past a failed handoff and retries it", async () => {
+    vi.useFakeTimers();
+    const { coordinator, service, scheduleContinuation } = createCoordinator();
+    const handoffs = [];
+    for (const profile of ["first", "second"]) {
+      const pending = await coordinator.request(createContext(), {
+        profile,
+        targetId: "tab-1",
+        reason: "Human verification required",
+      });
+      const claimed = await coordinator.claim({ id: pending.record.id, controllerId: "phone-a" });
+      await service.complete({
+        id: pending.record.id,
+        controllerId: "phone-a",
+        generation: claimed.generation,
+      });
+      handoffs.push(pending.record.id);
+    }
+    scheduleContinuation.mockRejectedValueOnce(new Error("scheduler unavailable"));
+
+    await coordinator.start();
+
+    expect(scheduleContinuation).toHaveBeenCalledTimes(2);
+    await expect(service.get(handoffs[1]!)).resolves.toMatchObject({ state: "resumed" });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await expect(service.get(handoffs[0]!)).resolves.toMatchObject({ state: "resumed" });
+    expect(scheduleContinuation).toHaveBeenCalledTimes(3);
+    coordinator.stop();
+  });
 });
