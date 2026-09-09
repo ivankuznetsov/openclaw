@@ -35,7 +35,9 @@ The phone must be able to reach the same HTTPS Gateway origin used by the Contro
 
 `gateway.publicOrigin` must use HTTPS for handoff links. A loopback URL cannot reach a browser on another machine. If you use a private VPN, its HTTPS hostname is valid as long as the phone can resolve and reach it.
 
-Sign in to the Control UI from the phone once before relying on handoffs. The handoff ID in the chat link is not a credential; the page still requires the Gateway's normal authenticated operator connection.
+Sign in to the Control UI from the phone once before relying on handoffs. Both viewing and controlling a handoff require an authenticated Gateway administrator (`operator.admin`). The handoff ID in the chat link is not a credential.
+
+This follows the Gateway's single operator trust boundary: administrators share handoff access. The originating chat sender is recorded as provenance, but is not mapped to a separate web identity. Use separate Gateways for owners who must not access each other's browser sessions.
 
 ## Use it
 

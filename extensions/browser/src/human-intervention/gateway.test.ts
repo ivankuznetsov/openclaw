@@ -97,9 +97,9 @@ describe("human intervention gateway", () => {
     expect(coordinator.get).not.toHaveBeenCalled();
   });
 
-  it("registers read and mutation methods with bounded operator scopes", () => {
+  it("requires administrator authority for observation and control", () => {
     const { scopes } = setup();
-    expect(scopes.get("browser.handoff.get")).toBe("operator.read");
+    expect(scopes.get("browser.handoff.get")).toBe("operator.admin");
     for (const method of [
       "browser.handoff.claim",
       "browser.handoff.renew",
@@ -108,8 +108,36 @@ describe("human intervention gateway", () => {
       "browser.handoff.cancel",
       "browser.handoff.browser",
     ]) {
-      expect(scopes.get(method)).toBe("operator.write");
+      expect(scopes.get(method)).toBe("operator.admin");
     }
+  });
+
+  it("rechecks feature enablement at the durable mutation boundary", async () => {
+    const options = { enabled: true };
+    const { handlers, coordinator } = setup(options);
+    coordinator.claim.mockImplementationOnce(async (_input, guard) => {
+      options.enabled = false;
+      guard?.();
+      throw new Error("mutation reached after disablement");
+    });
+    const response = await call(handlers.get("browser.handoff.claim"), {
+      id: "handoff-1",
+      controllerId: "phone-a",
+    });
+    expect(response.ok).toBe(false);
+    expect(response.error).toMatchObject({ message: "Human browser intervention is disabled" });
+  });
+
+  it("does not disclose a status read after client authority is revoked", async () => {
+    const { handlers } = setup();
+    let checks = 0;
+    const response = await call(
+      handlers.get("browser.handoff.get"),
+      { id: "handoff-1" },
+      () => ++checks === 1,
+    );
+    expect(response.ok).toBe(false);
+    expect(response.payload).toBeUndefined();
   });
 
   it("redacts session and owner identity from status responses", async () => {

@@ -8,6 +8,20 @@ import type { HumanInterventionRecord } from "./service.js";
 
 type GatewayHandler = Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
 
+// A Gateway is one operator trust boundary. Channel sender IDs are provenance,
+// not web credentials; observation and control both require administrator scope.
+function createAuthorityGuard(
+  assertFeatureEnabled: () => void,
+  hasCurrentClientAuthority: (() => boolean) | undefined,
+): () => void {
+  return () => {
+    assertFeatureEnabled();
+    if (hasCurrentClientAuthority?.() !== true) {
+      throw new Error("Gateway client authority changed during human browser handoff");
+    }
+  };
+}
+
 function readString(params: Record<string, unknown>, key: string): string {
   const value = params[key];
   if (typeof value !== "string" || !value.trim()) {
@@ -83,7 +97,6 @@ function sanitizeAction(value: unknown, targetId: string): Record<string, unknow
 function registerResultMethod(
   api: OpenClawPluginApi,
   method: string,
-  scope: "operator.read" | "operator.write",
   assertFeatureEnabled: () => void,
   run: (params: Record<string, unknown>, assertCurrentAuthority: () => void) => Promise<unknown>,
 ): void {
@@ -91,20 +104,20 @@ function registerResultMethod(
     method,
     async ({ params, respond, hasCurrentClientAuthority }) => {
       try {
-        assertFeatureEnabled();
-        const assertCurrentAuthority = () => {
-          if (hasCurrentClientAuthority?.() !== true) {
-            throw new Error("Gateway client authority changed during human browser handoff");
-          }
-        };
+        const assertCurrentAuthority = createAuthorityGuard(
+          assertFeatureEnabled,
+          hasCurrentClientAuthority,
+        );
         assertCurrentAuthority();
-        respond(true, await run(params, assertCurrentAuthority));
+        const result = await run(params, assertCurrentAuthority);
+        assertCurrentAuthority();
+        respond(true, result);
       } catch (error) {
         const message = formatErrorMessage(error);
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
       }
     },
-    { scope },
+    { scope: "operator.admin" },
   );
 }
 
@@ -120,19 +133,12 @@ export function registerHumanInterventionGatewayMethods(params: {
       throw new Error("Human browser intervention is disabled");
     }
   };
-  registerResultMethod(
-    api,
-    "browser.handoff.get",
-    "operator.read",
-    assertFeatureEnabled,
-    async (request) => ({
-      handoff: present(await coordinator.get(readString(request, "id"))),
-    }),
-  );
+  registerResultMethod(api, "browser.handoff.get", assertFeatureEnabled, async (request) => ({
+    handoff: present(await coordinator.get(readString(request, "id"))),
+  }));
   registerResultMethod(
     api,
     "browser.handoff.claim",
-    "operator.write",
     assertFeatureEnabled,
     async (request, guard) => ({
       handoff: present(
@@ -149,7 +155,6 @@ export function registerHumanInterventionGatewayMethods(params: {
   registerResultMethod(
     api,
     "browser.handoff.renew",
-    "operator.write",
     assertFeatureEnabled,
     async (request, guard) => ({
       handoff: present(
@@ -167,7 +172,6 @@ export function registerHumanInterventionGatewayMethods(params: {
   registerResultMethod(
     api,
     "browser.handoff.leave",
-    "operator.write",
     assertFeatureEnabled,
     async (request, guard) => ({
       handoff: present(
@@ -185,7 +189,6 @@ export function registerHumanInterventionGatewayMethods(params: {
   registerResultMethod(
     api,
     "browser.handoff.complete",
-    "operator.write",
     assertFeatureEnabled,
     async (request, guard) => ({
       handoff: present(
@@ -203,7 +206,6 @@ export function registerHumanInterventionGatewayMethods(params: {
   registerResultMethod(
     api,
     "browser.handoff.cancel",
-    "operator.write",
     assertFeatureEnabled,
     async (request, guard) => ({
       handoff: present(await coordinator.cancel(readString(request, "id"), guard)),
@@ -214,7 +216,11 @@ export function registerHumanInterventionGatewayMethods(params: {
     "browser.handoff.browser",
     async (request) => {
       try {
-        assertFeatureEnabled();
+        const assertCurrentAuthority = createAuthorityGuard(
+          assertFeatureEnabled,
+          request.hasCurrentClientAuthority,
+        );
+        assertCurrentAuthority();
         const id = readString(request.params, "id");
         const controllerId = readString(request.params, "controllerId");
         const generation = readGeneration(request.params);
@@ -222,9 +228,7 @@ export function registerHumanInterventionGatewayMethods(params: {
         await coordinator.runBrowserOperation(
           { id, controllerId, generation },
           async (record, authoritySignal) => {
-            if (request.hasCurrentClientAuthority?.() !== true) {
-              throw new Error("Gateway client authority changed during human browser input");
-            }
+            assertCurrentAuthority();
             if (operation === "screencast") {
               await params.forwardBrowserRequest({
                 ...request,
@@ -268,6 +272,6 @@ export function registerHumanInterventionGatewayMethods(params: {
         request.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));
       }
     },
-    { scope: "operator.write" },
+    { scope: "operator.admin" },
   );
 }
