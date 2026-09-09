@@ -28,6 +28,17 @@ type HumanInterventionView = {
 type HandoffResponse = { handoff: HumanInterventionView };
 type ScreencastResponse = { wsPath: string };
 
+type ViewerConnection = { client: GatewayBrowserClient; id: string };
+type ControlSession = {
+  connection: ViewerConnection;
+  controllerId: string;
+  generation: number;
+  stream?: BrowserScreencastClient;
+  renewTimer?: ReturnType<typeof setInterval>;
+  renewing: boolean;
+  inputOperation?: Promise<boolean>;
+};
+
 export function resolveHumanBrowserPoint(
   point: { clientX: number; clientY: number },
   bounds: Pick<DOMRect, "left" | "top" | "width" | "height">,
@@ -56,7 +67,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   @state() private handoff: HumanInterventionView | null = null;
   @state() private loading = true;
   @state() private busy = false;
-  @state() private inputBusy = false;
+  @state() private control: ControlSession | null = null;
   @state() private error = "";
   @state() private streamStatus: "idle" | "connecting" | "connected" | "closed" = "idle";
   @state() private frameUrl = "";
@@ -65,13 +76,12 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   @state() private zoom = 1;
   @state() private textDraft = "";
 
-  private controllerId = "";
-  private stream: BrowserScreencastClient | null = null;
-  private loadedKey = "";
-  private renewTimer?: ReturnType<typeof setInterval>;
+  private connection: ViewerConnection | null = null;
   private pointerStart?: { x: number; y: number; pointerId: number };
   private framePageUrl = "";
-  private inputOperation: Promise<boolean> | null = null;
+  private get inputBusy(): boolean {
+    return Boolean(this.control?.inputOperation);
+  }
   private readonly onVisibilityChange = () => {
     if (document.visibilityState === "hidden" && this.isController()) {
       void this.leave(false);
@@ -235,118 +245,150 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   }
 
   override disconnectedCallback(): void {
-    if (this.isController()) {
-      void this.leave(false);
-    }
+    this.resetConnection();
     document.removeEventListener("visibilitychange", this.onVisibilityChange);
-    this.stopStream();
     super.disconnectedCallback();
   }
 
-  protected override updated(changed: Map<string, unknown>): void {
+  protected override willUpdate(changed: Map<string, unknown>): void {
     if (changed.has("client") || changed.has("available") || changed.has("handoffId")) {
       void this.load();
     }
   }
 
-  private async load(): Promise<void> {
-    const client = this.client;
-    if (!client || !this.available || !this.handoffId) {
-      return;
+  private isCurrent(connection: ViewerConnection): boolean {
+    return (
+      this.isConnected &&
+      this.available &&
+      this.connection === connection &&
+      this.client === connection.client &&
+      this.handoffId === connection.id
+    );
+  }
+
+  private ownsControl(session: ControlSession): boolean {
+    return this.control === session && this.isCurrent(session.connection);
+  }
+
+  private resetConnection(): void {
+    const session = this.control;
+    this.connection = null;
+    if (session) {
+      this.stopControl(session);
+      void this.releaseSession(session).catch(() => {});
     }
-    const key = `${client.gatewayUrl}:${this.handoffId}`;
-    if (key === this.loadedKey) {
-      return;
-    }
-    this.loadedKey = key;
+    this.busy = false;
+    this.textDraft = "";
     this.handoff = null;
+  }
+
+  private async load(): Promise<void> {
+    if (!this.isConnected) return;
+    if (this.connection && this.isCurrent(this.connection)) return;
+    this.resetConnection();
+    const client = this.client;
+    if (!client || !this.available || !this.handoffId) return;
+    const connection = { client, id: this.handoffId };
+    this.connection = connection;
     this.loading = true;
     this.error = "";
-    let failed = false;
     try {
       const response = await client.request<HandoffResponse>("browser.handoff.get", {
-        id: this.handoffId,
+        id: connection.id,
       });
-      if (this.loadedKey === key) {
-        this.handoff = response.handoff;
-      }
+      if (this.isCurrent(connection)) this.handoff = response.handoff;
     } catch (error) {
-      if (this.loadedKey === key) {
-        this.error = formatUiError(error);
-        failed = true;
-      }
+      if (this.isCurrent(connection)) this.error = formatUiError(error);
     } finally {
-      if (this.loadedKey === key) {
-        this.loading = false;
-        if (failed) {
-          this.loadedKey = "";
-        }
-      }
+      if (this.isCurrent(connection)) this.loading = false;
     }
   }
 
   private retry(): void {
-    this.loadedKey = "";
+    this.resetConnection();
     void this.load();
   }
 
   private isController(): boolean {
-    return this.handoff?.state === "control" && Boolean(this.controllerId);
+    return this.control !== null && this.ownsControl(this.control);
+  }
+
+  private controlParams(session: ControlSession) {
+    return {
+      id: session.connection.id,
+      controllerId: session.controllerId,
+      generation: session.generation,
+    };
   }
 
   private async claim(): Promise<void> {
-    if (!this.client || !this.handoff || this.busy) return;
+    const connection = this.connection;
+    if (!connection || !this.isCurrent(connection) || !this.handoff || this.busy) return;
     this.busy = true;
     this.error = "";
-    this.controllerId ||= this.loadOrCreateControllerId();
+    // A delayed release from a retired claim must never own a later claim.
+    const controllerId = generateUUID();
+    let session: ControlSession | undefined;
     try {
-      const response = await this.client.request<HandoffResponse>("browser.handoff.claim", {
-        id: this.handoff.id,
-        controllerId: this.controllerId,
+      const response = await connection.client.request<HandoffResponse>("browser.handoff.claim", {
+        id: connection.id,
+        controllerId,
       });
+      session = {
+        connection,
+        controllerId,
+        generation: response.handoff.generation,
+        renewing: false,
+      };
+      if (!this.isCurrent(connection)) {
+        await this.releaseSession(session);
+        return;
+      }
       this.handoff = { ...this.handoff, ...response.handoff };
-      await this.startStream();
-      this.startRenewal();
+      this.control = session;
+      await this.startStream(session);
+      if (this.ownsControl(session)) {
+        const activeSession = session;
+        session.renewTimer = setInterval(() => void this.renew(activeSession), 30_000);
+      }
     } catch (error) {
-      this.error = formatUiError(error);
-      if (this.isController()) {
-        await this.leave(false);
+      if (this.isCurrent(connection)) this.error = formatUiError(error);
+      if (session && this.ownsControl(session)) {
+        this.stopControl(session);
+        await this.releaseSession(session).catch(() => {});
       }
     } finally {
-      this.busy = false;
+      if (this.isCurrent(connection)) this.busy = false;
     }
   }
 
-  private async startStream(): Promise<void> {
-    if (!this.client || !this.handoff || !this.isController()) return;
-    this.stopStream();
+  private async startStream(session: ControlSession): Promise<void> {
     this.streamStatus = "connecting";
-    const response = await this.client.request<ScreencastResponse>("browser.handoff.browser", {
-      id: this.handoff.id,
-      controllerId: this.controllerId,
-      generation: this.handoff.generation,
-      operation: "screencast",
-      maxWidth: 2000,
-      maxHeight: 2000,
-    });
-    this.stream = new BrowserScreencastClient({
-      gatewayUrl: this.client.gatewayUrl,
+    const response = await session.connection.client.request<ScreencastResponse>(
+      "browser.handoff.browser",
+      {
+        ...this.controlParams(session),
+        operation: "screencast",
+        maxWidth: 2000,
+        maxHeight: 2000,
+      },
+    );
+    if (!this.ownsControl(session)) return;
+    session.stream = new BrowserScreencastClient({
+      gatewayUrl: session.connection.client.gatewayUrl,
       wsPath: response.wsPath,
       onReady: () => {
-        this.streamStatus = "connected";
+        if (this.ownsControl(session)) this.streamStatus = "connected";
       },
       onMeta: ({ url }) => {
-        if (this.framePageUrl && url !== this.framePageUrl) {
+        if (this.ownsControl(session) && this.framePageUrl && url !== this.framePageUrl)
           this.clearFrame();
-        }
       },
-      onFrame: (frame) => this.presentFrame(frame),
+      onFrame: (frame) => {
+        if (this.ownsControl(session)) this.presentFrame(frame);
+      },
       onClose: () => {
-        this.stream = null;
-        if (this.isController()) {
-          this.streamStatus = "closed";
-          void this.leave(false);
-        }
+        if (this.ownsControl(session)) void this.leave(false);
       },
     });
   }
@@ -361,31 +403,34 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
     if (previous) URL.revokeObjectURL(previous);
   }
 
-  private startRenewal(): void {
-    clearInterval(this.renewTimer);
-    this.renewTimer = setInterval(() => void this.renew(), 30_000);
-  }
-
-  private async renew(): Promise<void> {
-    if (!this.client || !this.handoff || !this.isController()) return;
+  private async renew(session: ControlSession): Promise<void> {
+    if (!this.ownsControl(session) || session.renewing) return;
+    session.renewing = true;
     try {
-      const response = await this.client.request<HandoffResponse>("browser.handoff.renew", {
-        id: this.handoff.id,
-        controllerId: this.controllerId,
-        generation: this.handoff.generation,
-      });
-      this.handoff = { ...this.handoff, ...response.handoff };
+      const response = await session.connection.client.request<HandoffResponse>(
+        "browser.handoff.renew",
+        this.controlParams(session),
+      );
+      if (this.ownsControl(session)) this.handoff = { ...this.handoff!, ...response.handoff };
     } catch (error) {
-      this.stopStream();
-      this.error = formatUiError(error);
+      if (this.ownsControl(session)) {
+        this.error = formatUiError(error);
+        this.stopControl(session);
+        void this.releaseSession(session).catch(() => {});
+      }
+    } finally {
+      session.renewing = false;
     }
   }
 
-  private stopStream(): void {
-    clearInterval(this.renewTimer);
-    this.renewTimer = undefined;
-    this.stream?.close();
-    this.stream = null;
+  // Retire local input and callbacks synchronously; remote release may await input.
+  private stopControl(session: ControlSession): void {
+    clearInterval(session.renewTimer);
+    session.renewTimer = undefined;
+    session.stream?.close();
+    session.stream = undefined;
+    if (this.control !== session) return;
+    this.control = null;
     this.streamStatus = "idle";
     this.clearFrame();
   }
@@ -396,66 +441,52 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
     this.frameWidth = 0;
     this.frameHeight = 0;
     this.framePageUrl = "";
-  }
-
-  private loadOrCreateControllerId(): string {
-    const key = `openclaw.browserHandoff.controller:${this.handoffId}`;
-    try {
-      const existing = sessionStorage.getItem(key);
-      if (existing) return existing;
-      const created = generateUUID();
-      sessionStorage.setItem(key, created);
-      return created;
-    } catch {
-      return generateUUID();
-    }
+    this.pointerStart = undefined;
   }
 
   private async act(action: Record<string, unknown>): Promise<boolean> {
+    const session = this.control;
     if (
-      !this.client ||
-      !this.handoff ||
-      !this.isController() ||
+      !session ||
+      !this.ownsControl(session) ||
       this.busy ||
-      this.inputOperation ||
+      session.inputOperation ||
       this.streamStatus !== "connected" ||
       !this.frameUrl
     )
       return false;
     this.error = "";
-    this.inputBusy = true;
-    const operation = this.sendBrowserAction(action);
-    this.inputOperation = operation;
+    const operation = this.sendBrowserAction(session, action);
+    session.inputOperation = operation;
+    this.requestUpdate();
     try {
       return await operation;
     } finally {
-      if (this.inputOperation === operation) {
-        this.inputOperation = null;
-        this.inputBusy = false;
-      }
+      session.inputOperation = undefined;
+      if (this.ownsControl(session)) this.requestUpdate();
     }
   }
 
-  private async sendBrowserAction(action: Record<string, unknown>): Promise<boolean> {
-    if (!this.client || !this.handoff) return false;
+  private async sendBrowserAction(
+    session: ControlSession,
+    action: Record<string, unknown>,
+  ): Promise<boolean> {
     try {
-      await this.client.request("browser.handoff.browser", {
-        id: this.handoff.id,
-        controllerId: this.controllerId,
-        generation: this.handoff.generation,
+      await session.connection.client.request("browser.handoff.browser", {
+        ...this.controlParams(session),
         operation: "act",
         action,
       });
-      return true;
+      return this.ownsControl(session);
     } catch (error) {
-      this.error = formatUiError(error);
+      if (this.ownsControl(session)) this.error = formatUiError(error);
       return false;
     }
   }
 
   private async sendText(): Promise<void> {
     const text = this.textDraft;
-    if (text && (await this.act({ kind: "type", text }))) {
+    if (text && (await this.act({ kind: "type", text })) && this.textDraft === text) {
       this.textDraft = "";
     }
   }
@@ -492,50 +523,55 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
     );
   }
 
-  private async leave(showBusy = true): Promise<void> {
-    if (!this.client || !this.handoff || !this.isController()) return;
-    if (showBusy) this.busy = true;
+  private async releaseSession(session: ControlSession): Promise<HandoffResponse> {
+    await session.inputOperation;
+    return await session.connection.client.request<HandoffResponse>(
+      "browser.handoff.leave",
+      this.controlParams(session),
+    );
+  }
+
+  private async leave(showError = true): Promise<void> {
+    const session = this.control;
+    if (!session || !this.ownsControl(session)) return;
+    this.busy = true;
+    this.stopControl(session);
     try {
-      await this.inputOperation;
-      if (!this.client || !this.handoff || !this.isController()) return;
-      const response = await this.client.request<HandoffResponse>("browser.handoff.leave", {
-        id: this.handoff.id,
-        controllerId: this.controllerId,
-        generation: this.handoff.generation,
-      });
-      this.handoff = { ...this.handoff, ...response.handoff };
-      this.stopStream();
+      const response = await this.releaseSession(session);
+      if (this.isCurrent(session.connection))
+        this.handoff = { ...this.handoff!, ...response.handoff };
     } catch (error) {
-      if (showBusy) this.error = formatUiError(error);
+      if (showError && this.isCurrent(session.connection)) this.error = formatUiError(error);
     } finally {
-      if (showBusy) this.busy = false;
+      if (this.isCurrent(session.connection)) this.busy = false;
     }
   }
 
   private async finish(
     method: "browser.handoff.complete" | "browser.handoff.cancel",
   ): Promise<void> {
-    if (!this.client || !this.handoff || this.busy) return;
+    const connection = this.connection;
+    const session = this.control;
+    if (!connection || !this.isCurrent(connection) || !this.handoff || this.busy) return;
+    if (method === "browser.handoff.complete" && !session) return;
     this.busy = true;
     this.error = "";
     try {
-      await this.inputOperation;
-      if (!this.client || !this.handoff) return;
+      await session?.inputOperation;
+      if (!this.isCurrent(connection)) return;
+      if (session && !this.ownsControl(session)) return;
       const params =
-        method === "browser.handoff.complete"
-          ? {
-              id: this.handoff.id,
-              controllerId: this.controllerId,
-              generation: this.handoff.generation,
-            }
-          : { id: this.handoff.id };
-      const response = await this.client.request<HandoffResponse>(method, params);
-      this.handoff = { ...this.handoff, ...response.handoff };
-      this.stopStream();
+        method === "browser.handoff.complete" && session
+          ? this.controlParams(session)
+          : { id: connection.id };
+      const response = await connection.client.request<HandoffResponse>(method, params);
+      if (!this.isCurrent(connection)) return;
+      this.handoff = { ...this.handoff!, ...response.handoff };
+      if (session) this.stopControl(session);
     } catch (error) {
-      this.error = formatUiError(error);
+      if (this.isCurrent(connection)) this.error = formatUiError(error);
     } finally {
-      this.busy = false;
+      if (this.isCurrent(connection)) this.busy = false;
     }
   }
 

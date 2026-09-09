@@ -72,6 +72,127 @@ afterEach(() => {
 });
 
 describe("human browser intervention panel", () => {
+  it("does not acquire local control when another device rejects the claim", async () => {
+    const { client, request } = createClient();
+    const initial = await request("browser.handoff.get");
+    request.mockResolvedValueOnce({ handoff: { ...initial.handoff, state: "control" } });
+    const panel = await mountPanel(client);
+    request.mockRejectedValueOnce(new Error("controlled elsewhere"));
+    panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-take-control]")?.click();
+    await waitForFast(() =>
+      expect(panel.shadowRoot?.textContent).toContain("controlled elsewhere"),
+    );
+    expect(panel.shadowRoot?.querySelector("[data-complete]")).toBeNull();
+    expect(request.mock.calls.some(([method]) => method === "browser.handoff.leave")).toBe(false);
+  });
+
+  it("discards a stream ticket that arrives after the panel disconnects", async () => {
+    const socketConstructor = vi.fn(() => new TestSocket());
+    vi.stubGlobal(
+      "WebSocket",
+      class {
+        constructor() {
+          return socketConstructor();
+        }
+      },
+    );
+    const { client, request } = createClient();
+    const panel = await mountPanel(client);
+    request.mockResolvedValueOnce({ handoff: { generation: 2, state: "control" } });
+    let resolveTicket!: (value: { wsPath: string }) => void;
+    request.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveTicket = resolve;
+        }),
+    );
+    panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-take-control]")?.click();
+    await waitForFast(() => expect(resolveTicket).toBeTypeOf("function"));
+    panel.remove();
+    resolveTicket({ wsPath: "/browser/stream" });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(socketConstructor).not.toHaveBeenCalled();
+  });
+
+  it("reloads status when the authenticated client changes at the same URL", async () => {
+    const first = createClient();
+    const panel = await mountPanel(first.client);
+    const second = createClient();
+    panel.client = second.client;
+    await waitForFast(() =>
+      expect(second.request).toHaveBeenCalledWith("browser.handoff.get", { id: "handoff-1" }),
+    );
+  });
+
+  it("ignores a renewal response after completion retires control", async () => {
+    const intervals = vi.spyOn(globalThis, "setInterval");
+    vi.stubGlobal(
+      "WebSocket",
+      class {
+        constructor() {
+          return new TestSocket();
+        }
+      },
+    );
+    const { client, request } = createClient();
+    const panel = await mountPanel(client);
+    panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-take-control]")?.click();
+    await waitForFast(() =>
+      expect(panel.shadowRoot?.querySelector("[data-complete]")).not.toBeNull(),
+    );
+    let resolveRenewal!: (value: { handoff: { state: string; generation: number } }) => void;
+    request.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRenewal = resolve;
+        }),
+    );
+    const renew = intervals.mock.calls.find(([, delay]) => delay === 30_000)?.[0];
+    expect(renew).toBeTypeOf("function");
+    if (typeof renew === "function") renew();
+    panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-complete]")?.click();
+    await waitForFast(() => expect(panel.shadowRoot?.textContent).toContain("return to your chat"));
+    resolveRenewal({ handoff: { state: "control", generation: 2 } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(panel.shadowRoot?.textContent).toContain("return to your chat");
+    expect(panel.shadowRoot?.querySelector("[data-complete]")).toBeNull();
+  });
+
+  it("uses a new controller identity after the authenticated connection changes", async () => {
+    vi.stubGlobal(
+      "WebSocket",
+      class {
+        constructor() {
+          return new TestSocket();
+        }
+      },
+    );
+    const first = createClient();
+    const panel = await mountPanel(first.client);
+    panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-take-control]")?.click();
+    await waitForFast(() =>
+      expect(panel.shadowRoot?.querySelector("[data-complete]")).not.toBeNull(),
+    );
+    const second = createClient();
+    panel.client = second.client;
+    await waitForFast(() =>
+      expect(panel.shadowRoot?.querySelector("[data-take-control]")).not.toBeNull(),
+    );
+    panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-take-control]")?.click();
+    await waitForFast(() =>
+      expect(panel.shadowRoot?.querySelector("[data-complete]")).not.toBeNull(),
+    );
+    const firstClaim = first.request.mock.calls.find(
+      ([method]) => method === "browser.handoff.claim",
+    );
+    const secondClaim = second.request.mock.calls.find(
+      ([method]) => method === "browser.handoff.claim",
+    );
+    expect(firstClaim).toBeDefined();
+    expect(secondClaim).toBeDefined();
+    expect(secondClaim).not.toEqual(firstClaim);
+  });
+
   it("maps displayed image coordinates to the unchanged remote viewport", () => {
     expect(
       resolveHumanBrowserPoint(
