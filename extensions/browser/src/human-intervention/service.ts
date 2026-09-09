@@ -1,15 +1,12 @@
+import type {
+  HumanInterventionControlRequest,
+  HumanInterventionState,
+} from "../../human-intervention-api.js";
+export type { HumanInterventionState } from "../../human-intervention-api.js";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 
 const DEFAULT_PENDING_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_CONTROL_LEASE_MS = 60 * 1000;
-
-export type HumanInterventionState =
-  | "waiting"
-  | "control"
-  | "resume_pending"
-  | "resumed"
-  | "cancelled"
-  | "expired";
 
 export type HumanInterventionOwner = {
   channel: string;
@@ -210,11 +207,7 @@ export class HumanInterventionService {
   }
 
   async renew(
-    input: {
-      id: string;
-      controllerId: string;
-      generation: number;
-    },
+    input: HumanInterventionControlRequest,
     assertCurrentAuthority?: MutationAuthorityGuard,
   ): Promise<HumanInterventionRecord> {
     const located = await this.requireCurrentLocated(input.id);
@@ -234,22 +227,14 @@ export class HumanInterventionService {
     );
   }
 
-  async authorizeControl(input: {
-    id: string;
-    controllerId: string;
-    generation: number;
-  }): Promise<HumanInterventionRecord> {
+  async authorizeControl(input: HumanInterventionControlRequest): Promise<HumanInterventionRecord> {
     const located = await this.requireCurrentLocated(input.id);
     this.assertController(located.record, input);
     return located.record;
   }
 
   async leave(
-    input: {
-      id: string;
-      controllerId: string;
-      generation: number;
-    },
+    input: HumanInterventionControlRequest,
     assertCurrentAuthority?: MutationAuthorityGuard,
   ): Promise<HumanInterventionRecord> {
     const located = await this.requireCurrentLocated(input.id);
@@ -273,11 +258,7 @@ export class HumanInterventionService {
   }
 
   async complete(
-    input: {
-      id: string;
-      controllerId: string;
-      generation: number;
-    },
+    input: HumanInterventionControlRequest,
     assertCurrentAuthority?: MutationAuthorityGuard,
   ): Promise<HumanInterventionRecord> {
     const located = await this.requireCurrentLocated(input.id);

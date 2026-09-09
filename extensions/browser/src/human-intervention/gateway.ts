@@ -2,6 +2,10 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type {
+  HumanInterventionControlRequest,
+  HumanInterventionView,
+} from "../../human-intervention-api.js";
 import { browserControlAuthoritySignal } from "../browser/control-authority.js";
 import type { HumanInterventionCoordinator } from "./coordinator.js";
 import type { HumanInterventionRecord } from "./service.js";
@@ -38,7 +42,15 @@ function readGeneration(params: Record<string, unknown>): number {
   return value;
 }
 
-function present(record: HumanInterventionRecord) {
+function readControlRequest(params: Record<string, unknown>): HumanInterventionControlRequest {
+  return {
+    id: readString(params, "id"),
+    controllerId: readString(params, "controllerId"),
+    generation: readGeneration(params),
+  };
+}
+
+function present(record: HumanInterventionRecord): HumanInterventionView {
   return {
     id: record.id,
     state: record.state,
@@ -157,16 +169,7 @@ export function registerHumanInterventionGatewayMethods(params: {
     "browser.handoff.renew",
     assertFeatureEnabled,
     async (request, guard) => ({
-      handoff: present(
-        await coordinator.renew(
-          {
-            id: readString(request, "id"),
-            controllerId: readString(request, "controllerId"),
-            generation: readGeneration(request),
-          },
-          guard,
-        ),
-      ),
+      handoff: present(await coordinator.renew(readControlRequest(request), guard)),
     }),
   );
   registerResultMethod(
@@ -174,16 +177,7 @@ export function registerHumanInterventionGatewayMethods(params: {
     "browser.handoff.leave",
     assertFeatureEnabled,
     async (request, guard) => ({
-      handoff: present(
-        await coordinator.leave(
-          {
-            id: readString(request, "id"),
-            controllerId: readString(request, "controllerId"),
-            generation: readGeneration(request),
-          },
-          guard,
-        ),
-      ),
+      handoff: present(await coordinator.leave(readControlRequest(request), guard)),
     }),
   );
   registerResultMethod(
@@ -191,16 +185,7 @@ export function registerHumanInterventionGatewayMethods(params: {
     "browser.handoff.complete",
     assertFeatureEnabled,
     async (request, guard) => ({
-      handoff: present(
-        await coordinator.complete(
-          {
-            id: readString(request, "id"),
-            controllerId: readString(request, "controllerId"),
-            generation: readGeneration(request),
-          },
-          guard,
-        ),
-      ),
+      handoff: present(await coordinator.complete(readControlRequest(request), guard)),
     }),
   );
   registerResultMethod(
@@ -221,52 +206,47 @@ export function registerHumanInterventionGatewayMethods(params: {
           request.hasCurrentClientAuthority,
         );
         assertCurrentAuthority();
-        const id = readString(request.params, "id");
-        const controllerId = readString(request.params, "controllerId");
-        const generation = readGeneration(request.params);
+        const control = readControlRequest(request.params);
         const operation = readString(request.params, "operation");
-        await coordinator.runBrowserOperation(
-          { id, controllerId, generation },
-          async (record, authoritySignal) => {
-            assertCurrentAuthority();
-            if (operation === "screencast") {
-              await params.forwardBrowserRequest({
-                ...request,
-                params: {
-                  target: "host",
-                  method: "POST",
-                  path: "/screencast",
-                  query: { profile: record.browser.profile },
-                  body: {
-                    targetId: record.browser.targetId,
-                    maxWidth: request.params.maxWidth,
-                    maxHeight: request.params.maxHeight,
-                    [browserControlAuthoritySignal]: authoritySignal,
-                  },
+        await coordinator.runBrowserOperation(control, async (record, authoritySignal) => {
+          assertCurrentAuthority();
+          if (operation === "screencast") {
+            await params.forwardBrowserRequest({
+              ...request,
+              params: {
+                target: "host",
+                method: "POST",
+                path: "/screencast",
+                query: { profile: record.browser.profile },
+                body: {
+                  targetId: record.browser.targetId,
+                  maxWidth: request.params.maxWidth,
+                  maxHeight: request.params.maxHeight,
+                  [browserControlAuthoritySignal]: authoritySignal,
                 },
-              });
-              return;
-            }
-            if (operation === "act") {
-              const action = sanitizeAction(request.params.action, record.browser.targetId);
-              await params.forwardBrowserRequest({
-                ...request,
-                params: {
-                  target: "host",
-                  method: "POST",
-                  path: "/act",
-                  query: { profile: record.browser.profile },
-                  body: {
-                    ...action,
-                    [browserControlAuthoritySignal]: authoritySignal,
-                  },
+              },
+            });
+            return;
+          }
+          if (operation === "act") {
+            const action = sanitizeAction(request.params.action, record.browser.targetId);
+            await params.forwardBrowserRequest({
+              ...request,
+              params: {
+                target: "host",
+                method: "POST",
+                path: "/act",
+                query: { profile: record.browser.profile },
+                body: {
+                  ...action,
+                  [browserControlAuthoritySignal]: authoritySignal,
                 },
-              });
-              return;
-            }
-            throw new Error("operation must be screencast or act");
-          },
-        );
+              },
+            });
+            return;
+          }
+          throw new Error("operation must be screencast or act");
+        });
       } catch (error) {
         const message = formatErrorMessage(error);
         request.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, message));

@@ -1,5 +1,11 @@
 import { css, html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
+import type {
+  HumanInterventionControlRequest,
+  HumanInterventionInput,
+  HumanInterventionResponse as HandoffResponse,
+  HumanInterventionView,
+} from "../../../../extensions/browser/human-intervention-api.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerHumanInterventionEnglish } from "../../i18n/locales/en-human-intervention.ts";
@@ -13,19 +19,6 @@ import {
 
 registerHumanInterventionEnglish();
 
-type HandoffState = "waiting" | "control" | "resume_pending" | "resumed" | "cancelled" | "expired";
-
-type HumanInterventionView = {
-  id: string;
-  state: HandoffState;
-  generation: number;
-  reason?: string;
-  hostname?: string;
-  expiresAtMs?: number;
-  browser?: { target: "host"; profile: string; targetId: string };
-};
-
-type HandoffResponse = { handoff: HumanInterventionView };
 type ScreencastResponse = { wsPath: string };
 
 type ViewerConnection = { client: GatewayBrowserClient; id: string };
@@ -313,7 +306,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
     return this.control !== null && this.ownsControl(this.control);
   }
 
-  private controlParams(session: ControlSession) {
+  private controlParams(session: ControlSession): HumanInterventionControlRequest {
     return {
       id: session.connection.id,
       controllerId: session.controllerId,
@@ -344,7 +337,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
         await this.releaseSession(session);
         return;
       }
-      this.handoff = { ...this.handoff, ...response.handoff };
+      this.handoff = response.handoff;
       this.control = session;
       await this.startStream(session);
       if (this.ownsControl(session)) {
@@ -411,7 +404,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
         "browser.handoff.renew",
         this.controlParams(session),
       );
-      if (this.ownsControl(session)) this.handoff = { ...this.handoff!, ...response.handoff };
+      if (this.ownsControl(session)) this.handoff = response.handoff;
     } catch (error) {
       if (this.ownsControl(session)) {
         this.error = formatUiError(error);
@@ -444,7 +437,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
     this.pointerStart = undefined;
   }
 
-  private async act(action: Record<string, unknown>): Promise<boolean> {
+  private async act(action: HumanInterventionInput): Promise<boolean> {
     const session = this.control;
     if (
       !session ||
@@ -469,7 +462,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
 
   private async sendBrowserAction(
     session: ControlSession,
-    action: Record<string, unknown>,
+    action: HumanInterventionInput,
   ): Promise<boolean> {
     try {
       await session.connection.client.request("browser.handoff.browser", {
@@ -538,8 +531,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
     this.stopControl(session);
     try {
       const response = await this.releaseSession(session);
-      if (this.isCurrent(session.connection))
-        this.handoff = { ...this.handoff!, ...response.handoff };
+      if (this.isCurrent(session.connection)) this.handoff = response.handoff;
     } catch (error) {
       if (showError && this.isCurrent(session.connection)) this.error = formatUiError(error);
     } finally {
@@ -566,7 +558,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
           : { id: connection.id };
       const response = await connection.client.request<HandoffResponse>(method, params);
       if (!this.isCurrent(connection)) return;
-      this.handoff = { ...this.handoff!, ...response.handoff };
+      this.handoff = response.handoff;
       if (session) this.stopControl(session);
     } catch (error) {
       if (this.isCurrent(connection)) this.error = formatUiError(error);

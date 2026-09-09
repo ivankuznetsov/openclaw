@@ -2,6 +2,7 @@ import type {
   OpenClawPluginApi,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { HumanInterventionControlRequest } from "../../human-intervention-api.js";
 import { HumanInterventionProfileGate } from "./profile-gate.js";
 import {
   HumanInterventionService,
@@ -144,11 +145,7 @@ export class HumanInterventionCoordinator {
   }
 
   async renew(
-    input: {
-      id: string;
-      controllerId: string;
-      generation: number;
-    },
+    input: HumanInterventionControlRequest,
     assertCurrentAuthority?: () => void,
   ): Promise<HumanInterventionRecord> {
     return await this.runExclusive(input.id, async () => {
@@ -159,7 +156,7 @@ export class HumanInterventionCoordinator {
   }
 
   async runBrowserOperation<T>(
-    input: { id: string; controllerId: string; generation: number },
+    input: HumanInterventionControlRequest,
     operation: (record: HumanInterventionRecord, authoritySignal: AbortSignal) => Promise<T>,
   ): Promise<T> {
     return await this.runExclusive(input.id, async () => {
@@ -169,11 +166,7 @@ export class HumanInterventionCoordinator {
   }
 
   async leave(
-    input: {
-      id: string;
-      controllerId: string;
-      generation: number;
-    },
+    input: HumanInterventionControlRequest,
     assertCurrentAuthority?: () => void,
   ): Promise<HumanInterventionRecord> {
     return await this.runExclusive(input.id, async () => {
@@ -192,11 +185,7 @@ export class HumanInterventionCoordinator {
   }
 
   async complete(
-    input: {
-      id: string;
-      controllerId: string;
-      generation: number;
-    },
+    input: HumanInterventionControlRequest,
     assertCurrentAuthority?: () => void,
   ): Promise<HumanInterventionRecord> {
     const completed = await this.runExclusive(input.id, async () => {

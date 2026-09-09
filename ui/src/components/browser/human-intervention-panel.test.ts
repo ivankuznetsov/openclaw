@@ -1,5 +1,9 @@
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type {
+  HumanInterventionResponse,
+  HumanInterventionState,
+} from "../../../../extensions/browser/human-intervention-api.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -20,31 +24,38 @@ function screencastFrame(url: string): ArrayBuffer {
   return packet.buffer;
 }
 
+function handoff(
+  state: HumanInterventionState = "waiting",
+  generation = 1,
+): HumanInterventionResponse {
+  return {
+    handoff: {
+      id: "handoff-1",
+      state,
+      generation,
+      reason: "Complete the verification challenge",
+      hostname: "accounts.example",
+      expiresAtMs: Date.now() + 60_000,
+      browser: { target: "host", profile: "openclaw", targetId: "tab-1" },
+    },
+  };
+}
+
 function createClient() {
   const request = vi.fn(async (method: string) => {
     if (method === "browser.handoff.get") {
-      return {
-        handoff: {
-          id: "handoff-1",
-          state: "waiting",
-          generation: 1,
-          reason: "Complete the verification challenge",
-          hostname: "accounts.example",
-          expiresAtMs: Date.now() + 60_000,
-          browser: { target: "host", profile: "openclaw", targetId: "tab-1" },
-        },
-      };
+      return handoff();
     }
     if (method === "browser.handoff.claim") {
-      return { handoff: { generation: 2, state: "control" } };
+      return handoff("control", 2);
     }
     if (method === "browser.handoff.browser") {
       return { wsPath: "/browser/stream" };
     }
     if (method === "browser.handoff.complete") {
-      return { handoff: { generation: 3, state: "resumed" } };
+      return handoff("resumed", 3);
     }
-    return { handoff: { generation: 2, state: "control" } };
+    return handoff("control", 2);
   });
   return {
     request,
@@ -98,7 +109,7 @@ describe("human browser intervention panel", () => {
     );
     const { client, request } = createClient();
     const panel = await mountPanel(client);
-    request.mockResolvedValueOnce({ handoff: { generation: 2, state: "control" } });
+    request.mockResolvedValueOnce(handoff("control", 2));
     let resolveTicket!: (value: { wsPath: string }) => void;
     request.mockImplementationOnce(
       () =>
@@ -140,7 +151,7 @@ describe("human browser intervention panel", () => {
     await waitForFast(() =>
       expect(panel.shadowRoot?.querySelector("[data-complete]")).not.toBeNull(),
     );
-    let resolveRenewal!: (value: { handoff: { state: string; generation: number } }) => void;
+    let resolveRenewal!: (value: HumanInterventionResponse) => void;
     request.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
@@ -152,7 +163,7 @@ describe("human browser intervention panel", () => {
     if (typeof renew === "function") renew();
     panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-complete]")?.click();
     await waitForFast(() => expect(panel.shadowRoot?.textContent).toContain("return to your chat"));
-    resolveRenewal({ handoff: { state: "control", generation: 2 } });
+    resolveRenewal(handoff("control", 2));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(panel.shadowRoot?.textContent).toContain("return to your chat");
     expect(panel.shadowRoot?.querySelector("[data-complete]")).toBeNull();
@@ -363,9 +374,9 @@ describe("human browser intervention panel", () => {
         return {};
       }
       if (method === "browser.handoff.complete") {
-        return { handoff: { generation: 3, state: "resumed" } };
+        return handoff("resumed", 3);
       }
-      return { handoff: { generation: 2, state: "control" } };
+      return handoff("control", 2);
     });
 
     const scrollDown = [
