@@ -46,6 +46,7 @@ export type HumanInterventionRecord = {
   controllerLeaseExpiresAtMs?: number;
   continuationId?: string;
   completedAtMs?: number;
+  /** Durable queue-admission time; this does not record execution start. */
   resumedAtMs?: number;
 };
 
@@ -290,7 +291,7 @@ export class HumanInterventionService {
     );
   }
 
-  async markResumed(input: {
+  async markContinuationAdmitted(input: {
     id: string;
     continuationId: string;
   }): Promise<HumanInterventionRecord> {

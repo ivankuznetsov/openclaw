@@ -344,10 +344,10 @@ describe("HumanInterventionCoordinator", () => {
       hostname: "example.com",
     });
     const claimed = await coordinator.claim({ id: pending.record.id, controllerId: "phone-a" });
-    const markResumed = service.markResumed.bind(service);
-    vi.spyOn(service, "markResumed")
+    const markContinuationAdmitted = service.markContinuationAdmitted.bind(service);
+    vi.spyOn(service, "markContinuationAdmitted")
       .mockRejectedValueOnce(new Error("simulated crash after scheduling"))
-      .mockImplementation(markResumed);
+      .mockImplementation(markContinuationAdmitted);
 
     await expect(
       coordinator.complete({

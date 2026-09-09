@@ -42,21 +42,25 @@ function handoff(
 }
 
 function createClient() {
-  const request = vi.fn(async (method: string) => {
-    if (method === "browser.handoff.get") {
-      return handoff();
-    }
-    if (method === "browser.handoff.claim") {
+  const request = vi.fn(
+    async (
+      method: string,
+    ): Promise<HumanInterventionResponse | { wsPath: string } | { ok: true }> => {
+      if (method === "browser.handoff.get") {
+        return handoff();
+      }
+      if (method === "browser.handoff.claim") {
+        return handoff("control", 2);
+      }
+      if (method === "browser.handoff.browser") {
+        return { wsPath: "/browser/stream" };
+      }
+      if (method === "browser.handoff.complete") {
+        return handoff("resumed", 3);
+      }
       return handoff("control", 2);
-    }
-    if (method === "browser.handoff.browser") {
-      return { wsPath: "/browser/stream" };
-    }
-    if (method === "browser.handoff.complete") {
-      return handoff("resumed", 3);
-    }
-    return handoff("control", 2);
-  });
+    },
+  );
   return {
     request,
     client: { request, gatewayUrl: "ws://gateway.test" } as unknown as GatewayBrowserClient,
@@ -83,10 +87,19 @@ afterEach(() => {
 });
 
 describe("human browser intervention panel", () => {
+  it.each([
+    ["resume_pending", "waiting to be queued"],
+    ["resumed", "queued to continue"],
+  ] as const)("reports %s without claiming that execution has started", async (state, message) => {
+    const { client, request } = createClient();
+    request.mockResolvedValueOnce(handoff(state, 3));
+    const panel = await mountPanel(client);
+    expect(panel.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain(message);
+  });
+
   it("does not acquire local control when another device rejects the claim", async () => {
     const { client, request } = createClient();
-    const initial = await request("browser.handoff.get");
-    request.mockResolvedValueOnce({ handoff: { ...initial.handoff, state: "control" } });
+    request.mockResolvedValueOnce(handoff("control", 2));
     const panel = await mountPanel(client);
     request.mockRejectedValueOnce(new Error("controlled elsewhere"));
     panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-take-control]")?.click();
@@ -326,8 +339,8 @@ describe("human browser intervention panel", () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
-        static createObjectURL = vi.fn(() => "blob:frame");
-        static revokeObjectURL = vi.fn();
+        static override createObjectURL = vi.fn(() => "blob:frame");
+        static override revokeObjectURL = vi.fn();
       },
     );
     vi.stubGlobal(
@@ -371,7 +384,7 @@ describe("human browser intervention panel", () => {
         await new Promise<void>((resolve) => {
           releaseInput = resolve;
         });
-        return {};
+        return { ok: true };
       }
       if (method === "browser.handoff.complete") {
         return handoff("resumed", 3);

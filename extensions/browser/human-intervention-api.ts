@@ -3,6 +3,7 @@ export type HumanInterventionState =
   | "waiting"
   | "control"
   | "resume_pending"
+  // Stored/wire name retained: the continuation is admitted, not necessarily running.
   | "resumed"
   | "cancelled"
   | "expired";

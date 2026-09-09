@@ -65,7 +65,7 @@ export function buildHumanInterventionLaunchUrl(params: {
 }
 
 export class HumanInterventionCoordinator {
-  private readonly continuationRuns = new Map<string, Promise<HumanInterventionRecord>>();
+  private readonly pendingAdmissions = new Map<string, Promise<HumanInterventionRecord>>();
   private readonly handoffTails = new Map<string, Promise<void>>();
   private readonly controlAuthorities = new Map<string, ControlAuthority>();
   private readonly now: () => number;
@@ -196,12 +196,12 @@ export class HumanInterventionCoordinator {
     if (completed.state === "resumed") {
       return completed;
     }
-    return await this.schedule(completed);
+    return await this.admitContinuation(completed);
   }
 
   async reconcile(): Promise<void> {
     for (const record of await this.service.listResumePending()) {
-      await this.schedule(record);
+      await this.admitContinuation(record);
     }
   }
 
@@ -288,19 +288,23 @@ export class HumanInterventionCoordinator {
     authority.controller.abort();
   }
 
-  private async schedule(record: HumanInterventionRecord): Promise<HumanInterventionRecord> {
-    const existing = this.continuationRuns.get(record.id);
+  private async admitContinuation(
+    record: HumanInterventionRecord,
+  ): Promise<HumanInterventionRecord> {
+    const existing = this.pendingAdmissions.get(record.id);
     if (existing) {
       return await existing;
     }
-    const run = this.scheduleOnce(record).finally(() => {
-      this.continuationRuns.delete(record.id);
+    const run = this.admitContinuationOnce(record).finally(() => {
+      this.pendingAdmissions.delete(record.id);
     });
-    this.continuationRuns.set(record.id, run);
+    this.pendingAdmissions.set(record.id, run);
     return await run;
   }
 
-  private async scheduleOnce(record: HumanInterventionRecord): Promise<HumanInterventionRecord> {
+  private async admitContinuationOnce(
+    record: HumanInterventionRecord,
+  ): Promise<HumanInterventionRecord> {
     const continuationId = record.continuationId;
     if (!continuationId) {
       throw new Error("Human browser handoff is missing its continuation id");
@@ -324,6 +328,6 @@ export class HumanInterventionCoordinator {
     if (!handle) {
       throw new Error("Could not schedule the human browser handoff continuation");
     }
-    return await this.service.markResumed({ id: record.id, continuationId });
+    return await this.service.markContinuationAdmitted({ id: record.id, continuationId });
   }
 }

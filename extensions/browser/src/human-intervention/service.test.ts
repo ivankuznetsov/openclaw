@@ -270,7 +270,10 @@ describe("HumanInterventionService", () => {
       state: "resume_pending",
       continuationId: completed.continuationId,
     });
-    await restarted.markResumed({ id: pending.id, continuationId: completed.continuationId! });
+    await restarted.markContinuationAdmitted({
+      id: pending.id,
+      continuationId: completed.continuationId!,
+    });
     await expect(restarted.listResumePending()).resolves.toEqual([]);
   });
 

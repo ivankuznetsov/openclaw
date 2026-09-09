@@ -568,8 +568,8 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   }
 
   private statusText(): string {
-    if (this.handoff?.state === "resumed" || this.handoff?.state === "resume_pending")
-      return t("humanBrowser.resumed");
+    if (this.handoff?.state === "resume_pending") return t("humanBrowser.resumePending");
+    if (this.handoff?.state === "resumed") return t("humanBrowser.continuationQueued");
     if (this.handoff?.state === "cancelled") return t("humanBrowser.cancelled");
     if (this.handoff?.state === "expired") return t("humanBrowser.expired");
     if (this.handoff?.state === "control")

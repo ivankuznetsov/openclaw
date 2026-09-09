@@ -56,6 +56,8 @@ Open the link and select **Take control**. The page supports taps, drags, page s
 
 Closing or backgrounding the page leaves the task paused. A controller lease also expires after a disconnect, allowing the same or another authenticated owner device to claim it later. Handoffs expire after 30 minutes by default.
 
+After completion, **waiting to be queued** means continuation admission is still pending. **Queued to continue** means the Gateway has durably accepted the continuation; it does not mean the agent has already started or finished. Watch the originating chat for the task result.
+
 ## Chat support
 
 Telegram, iMessage, and WhatsApp use the same portable HTTPS text link and lifecycle. The mechanism uses OpenClaw's current delivery context, so completion returns to the same channel, account, conversation, and thread when applicable. Handoff creation is limited to owner-authorized direct conversations; group and channel sessions do not receive browser links.
