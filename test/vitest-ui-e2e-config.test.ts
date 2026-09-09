@@ -112,6 +112,7 @@ const realGatewayFiles = [
   "chat-agent-avatar.real-gateway",
   "chat-loading-performance.real-gateway",
   "chat-project-media.real-gateway",
+  "chat-thinking-metadata.real-gateway",
   "chat-widget-sandbox.real-gateway",
   "command-palette-catalog.real-gateway",
   "control-ui-auth-transports",
@@ -124,6 +125,7 @@ const realGatewayFiles = [
   "profile-page.real-gateway",
   "session-progress-hovercard.real-gateway",
   "usage-sessions-owner-attribution",
+  "worker-initial-setup.real-gateway",
 ]
   .map((name) => `ui/src/e2e/${name}.e2e.test.ts`)
   .concat(qaLabFiles);
@@ -529,6 +531,13 @@ describe("Control UI E2E resource ownership", () => {
           fileParallelism: false,
         },
         {
+          file: "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial-standalone",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
           file: "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial-standalone",
           phase: 1,
@@ -565,6 +574,13 @@ describe("Control UI E2E resource ownership", () => {
         },
         {
           file: "ui/src/e2e/profile-page.real-gateway.e2e.test.ts",
+          project: "ui-e2e-serial",
+          phase: 1,
+          workers: 1,
+          fileParallelism: false,
+        },
+        {
+          file: "ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts",
           project: "ui-e2e-serial",
           phase: 1,
           workers: 1,

@@ -594,6 +594,7 @@ export async function listSessionsFromStoreAsync(
         cfg,
         storePath: target.storeKey ? target.storeTarget.storePath : list.storePath,
         store,
+        modelSource: target.modelSource,
         key: target.storeKey ?? key,
         entry,
         agentId: target.agentId,
