@@ -4,6 +4,7 @@ import type { GatewayProbeResult } from "../gateway/probe.js";
 import type { TailscaleServeRouteObservation } from "../shared/tailscale-status.js";
 import {
   TAILSCALE_PAIRING_CHECK_ID,
+  analyzePairingEndpoint,
   collectTailscalePairingConfigurationFindings,
 } from "./doctor-tailscale-pairing-config.js";
 import { collectTailscalePairingHealthFindings } from "./doctor-tailscale-pairing.js";
@@ -31,11 +32,11 @@ function findings(
   return collectTailscalePairingConfigurationFindings({
     cfg,
     gatewayPort: 18789,
-    pairingUrl: {
+    endpoint: analyzePairingEndpoint({
       url: options.url ?? "wss://node.tail.ts.net:18789",
       source: options.source ?? "plugins.entries.device-pair.config.publicUrl",
       ...(options.error ? { error: options.error } : {}),
-    },
+    }),
     serveInspection:
       status === "ok" ? { status, routes: options.routes ?? [externalRoute] } : { status },
   });
@@ -480,6 +481,31 @@ describe("doctor Tailscale pairing preflight runtime evidence", () => {
       }),
     });
   }
+
+  it.each(["ws://100.64.0.9:18789", "ws://[fd7a:115c:a1e0::9]:18789"])(
+    "does not probe an insecure tailnet endpoint: %s",
+    async (publicUrl) => {
+      const fetchFn = vi.fn();
+      const probeGateway = vi
+        .fn()
+        .mockRejectedValue(new Error("Insecure endpoint must not be probed"));
+      const result = await collectTailscalePairingHealthFindings({
+        cfg: { plugins: { entries: { "device-pair": { config: { publicUrl } } } } },
+        env: {},
+        runCommandWithTimeout: serveRunner(),
+        fetchFn,
+        probeGateway,
+      });
+
+      expect(result).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ severity: "error", requirement: "secure-mobile-url" }),
+        ]),
+      );
+      expect(fetchFn).not.toHaveBeenCalled();
+      expect(probeGateway).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps HTTP liveness separate from a WebSocket attribution failure", async () => {
     const fetchFn = vi.fn().mockResolvedValue(

@@ -13,7 +13,6 @@ import { readResponseWithLimit } from "../infra/http-body.js";
 import {
   resolveConfiguredPairingPublicUrl,
   resolvePairingGatewayUrl,
-  validateMobilePairingUrl,
 } from "../pairing/setup-code.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import {
@@ -25,7 +24,7 @@ import {
   TAILSCALE_PAIRING_CHECK_ID,
   collectTailscalePairingConfigurationFindings,
   pairingTarget,
-  parsePairingUrl,
+  analyzePairingEndpoint,
 } from "./doctor-tailscale-pairing-config.js";
 
 const HTTP_LIVENESS_MAX_BODY_BYTES = 4 * 1024;
@@ -203,16 +202,17 @@ export async function collectTailscalePairingHealthFindings(
       ]),
       signal,
     );
+    const endpoint = analyzePairingEndpoint(pairingUrl);
+    url = endpoint.url;
     findings.push(
       ...collectTailscalePairingConfigurationFindings({
         cfg: params.cfg,
         gatewayPort: resolveGatewayPort(params.cfg, env),
-        pairingUrl,
+        endpoint,
         serveInspection,
       }),
     );
-    url = parsePairingUrl(pairingUrl.url);
-    if (!url || validateMobilePairingUrl(pairingTarget(url), pairingUrl.source)) {
+    if (!url || endpoint.mobileUrlError) {
       return findings;
     }
 

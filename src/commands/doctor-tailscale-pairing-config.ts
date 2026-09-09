@@ -18,7 +18,7 @@ type ServeInspection = Awaited<ReturnType<typeof inspectTailscaleServeRoutesWith
 type TailscalePairingConfigurationInput = {
   cfg: OpenClawConfig;
   gatewayPort: number;
-  pairingUrl: PairingUrlResult;
+  endpoint: ReturnType<typeof analyzePairingEndpoint>;
   serveInspection: ServeInspection;
 };
 
@@ -35,7 +35,7 @@ function configPathForUrlSource(source: string | undefined): string | undefined 
   return undefined;
 }
 
-export function parsePairingUrl(raw: string | undefined): URL | null {
+function parsePairingUrl(raw: string | undefined): URL | null {
   if (!raw) {
     return null;
   }
@@ -47,6 +47,18 @@ export function parsePairingUrl(raw: string | undefined): URL | null {
   } catch {
     return null;
   }
+}
+
+export function analyzePairingEndpoint(resolved: PairingUrlResult) {
+  const url = parsePairingUrl(resolved.url);
+  const host = url?.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  const mobileUrlError = url
+    ? (validateMobilePairingUrl(pairingTarget(url), resolved.source) ??
+      (url.protocol === "ws:" && isTailnetIPv6(host ?? "")
+        ? "Mobile pairing over a Tailscale IPv6 address requires a secure gateway URL (wss://)."
+        : null))
+    : null;
+  return { url, source: resolved.source, error: resolved.error, mobileUrlError };
 }
 
 function effectivePort(url: URL): number {
@@ -150,14 +162,14 @@ export function collectTailscalePairingConfigurationFindings(
   params: TailscalePairingConfigurationInput,
 ): readonly HealthFinding[] {
   const findings: HealthFinding[] = [];
-  const sourcePath = configPathForUrlSource(params.pairingUrl.source);
-  const url = parsePairingUrl(params.pairingUrl.url);
+  const sourcePath = configPathForUrlSource(params.endpoint.source);
+  const { url, mobileUrlError } = params.endpoint;
   if (!url) {
     findings.push({
       checkId: TAILSCALE_PAIRING_CHECK_ID,
       severity: "warning",
-      message: params.pairingUrl.error
-        ? `The mobile pairing endpoint could not be resolved: ${params.pairingUrl.error}`
+      message: params.endpoint.error
+        ? `The mobile pairing endpoint could not be resolved: ${params.endpoint.error}`
         : "The mobile pairing endpoint could not be resolved from the current configuration.",
       ...(sourcePath ? { path: sourcePath } : {}),
       requirement: "pairing-url-resolved",
@@ -168,12 +180,6 @@ export function collectTailscalePairingConfigurationFindings(
   }
 
   const target = pairingTarget(url);
-  const normalizedHost = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
-  const mobileUrlError =
-    validateMobilePairingUrl(target, params.pairingUrl.source) ??
-    (url.protocol === "ws:" && isTailnetIPv6(normalizedHost)
-      ? "Mobile pairing over a Tailscale IPv6 address requires a secure gateway URL (wss://)."
-      : null);
   if (mobileUrlError) {
     findings.push({
       checkId: TAILSCALE_PAIRING_CHECK_ID,
@@ -209,7 +215,7 @@ export function collectTailscalePairingConfigurationFindings(
     }
   }
 
-  const tailscaleRelevant = isLikelyTailscaleTarget(url, params.pairingUrl.source);
+  const tailscaleRelevant = isLikelyTailscaleTarget(url, params.endpoint.source);
   if (params.serveInspection.status !== "ok") {
     if (tailscaleRelevant) {
       findings.push({
@@ -256,7 +262,7 @@ export function collectTailscalePairingConfigurationFindings(
   }
 
   const configuredManagedPublication = isConfiguredManagedTailscalePublication(
-    params.pairingUrl.source,
+    params.endpoint.source,
   );
   const hasForegroundRoute = authorityRoutes.some((route) => route.management === "foreground");
   if (configuredManagedPublication && !hasForegroundRoute) {
