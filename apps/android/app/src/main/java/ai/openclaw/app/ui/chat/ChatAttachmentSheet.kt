@@ -66,6 +66,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import java.util.Locale
 
@@ -316,7 +319,7 @@ private class GalleryPickerView(
 }
 
 @Composable
-private fun LocationAttachment(
+internal fun LocationAttachment(
   admit: () -> Boolean,
   onLocation: (String) -> Unit,
 ) {
@@ -342,6 +345,9 @@ private fun LocationAttachment(
         if (admit()) {
           onLocation(String.format(Locale.ROOT, "https://www.google.com/maps?q=%.6f,%.6f", location.latitude, location.longitude))
         }
+      } catch (_: TimeoutCancellationException) {
+        currentCoroutineContext().ensureActive()
+        failed = true
       } catch (error: CancellationException) {
         throw error
       } catch (_: Exception) {
