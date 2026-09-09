@@ -73,6 +73,26 @@ function request(service: HumanInterventionService, overrides = {}) {
 }
 
 describe("HumanInterventionService", () => {
+  it("checks the handoff deadline when a queued claim actually commits", async () => {
+    const store = createMemoryStore();
+    let now = 1_000;
+    const service = new HumanInterventionService(store, {
+      now: () => now,
+      pendingTtlMs: 100,
+    });
+    const pending = await request(service);
+    const update = store.update;
+    if (!update) throw new Error("atomic update missing");
+    store.update = async (key, mutate) => {
+      now = 1_101;
+      return await update(key, mutate);
+    };
+    await expect(service.claim({ id: pending.id, controllerId: "phone-a" })).rejects.toThrow(
+      "expired",
+    );
+    await expect(service.get(pending.id)).resolves.toMatchObject({ state: "expired" });
+  });
+
   it("reserves a profile and rejects a competing task", async () => {
     const store = createMemoryStore();
     const service = new HumanInterventionService(store, {

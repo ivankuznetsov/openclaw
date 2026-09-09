@@ -82,13 +82,29 @@ function profileKey(browser: HumanInterventionBrowser): string {
   return `${browser.target}:${browser.profile}`;
 }
 
-function isProfileReserved(record: HumanInterventionRecord, now: number): boolean {
+function canExpire(record: HumanInterventionRecord): boolean {
   return (
-    (record.state === "waiting" ||
-      record.state === "control" ||
-      record.state === "resume_pending") &&
-    record.expiresAtMs > now
+    record.state === "waiting" || record.state === "control" || record.state === "resume_pending"
   );
+}
+
+function isProfileReserved(record: HumanInterventionRecord, now: number): boolean {
+  return canExpire(record) && record.expiresAtMs > now;
+}
+
+function endControl(
+  current: HumanInterventionRecord,
+  state: "waiting" | "cancelled" | "expired",
+  now: number,
+): HumanInterventionRecord {
+  return {
+    ...current,
+    state,
+    generation: current.generation + 1,
+    updatedAtMs: now,
+    controllerId: undefined,
+    controllerLeaseExpiresAtMs: undefined,
+  };
 }
 
 function defaultRandomId(): string {
@@ -154,49 +170,29 @@ export class HumanInterventionService {
     input: { id: string; controllerId: string },
     assertCurrentAuthority?: MutationAuthorityGuard,
   ): Promise<HumanInterventionRecord> {
-    const located = await this.requireCurrentLocated(input.id);
-    const now = this.now();
-    return await this.transition(
-      located.key,
+    return await this.transitionById(
       input.id,
-      (current) => {
+      (current, now) => {
         if (
           current.expiresAtMs <= now &&
           (current.state === "waiting" || current.state === "control")
         ) {
           throw new HumanInterventionConflictError("Human browser handoff has expired");
         }
-        if (current.state === "waiting") {
-          return {
-            ...current,
-            state: "control",
-            generation: current.generation + 1,
-            updatedAtMs: now,
-            controllerId: input.controllerId,
-            controllerLeaseExpiresAtMs: now + this.controlLeaseMs,
-          };
-        }
-        if (current.state !== "control") {
+        if (current.state !== "waiting" && current.state !== "control") {
           throw new HumanInterventionConflictError(
             `Human browser handoff cannot be claimed while ${current.state}`,
           );
         }
-        if (
-          current.controllerId === input.controllerId &&
-          (current.controllerLeaseExpiresAtMs ?? 0) > now
-        ) {
-          return {
-            ...current,
-            updatedAtMs: now,
-            controllerLeaseExpiresAtMs: now + this.controlLeaseMs,
-          };
-        }
-        if ((current.controllerLeaseExpiresAtMs ?? 0) > now) {
+        const leaseActive =
+          current.state === "control" && (current.controllerLeaseExpiresAtMs ?? 0) > now;
+        if (leaseActive && current.controllerId !== input.controllerId) {
           throw new HumanInterventionConflictError("Human browser handoff is controlled elsewhere");
         }
         return {
           ...current,
-          generation: current.generation + 1,
+          state: "control",
+          generation: current.generation + (leaseActive ? 0 : 1),
           updatedAtMs: now,
           controllerId: input.controllerId,
           controllerLeaseExpiresAtMs: now + this.controlLeaseMs,
@@ -210,12 +206,9 @@ export class HumanInterventionService {
     input: HumanInterventionControlRequest,
     assertCurrentAuthority?: MutationAuthorityGuard,
   ): Promise<HumanInterventionRecord> {
-    const located = await this.requireCurrentLocated(input.id);
-    const now = this.now();
-    return await this.transition(
-      located.key,
+    return await this.transitionById(
       input.id,
-      (current) => {
+      (current, now) => {
         this.assertController(current, input);
         return {
           ...current,
@@ -237,21 +230,11 @@ export class HumanInterventionService {
     input: HumanInterventionControlRequest,
     assertCurrentAuthority?: MutationAuthorityGuard,
   ): Promise<HumanInterventionRecord> {
-    const located = await this.requireCurrentLocated(input.id);
-    const now = this.now();
-    return await this.transition(
-      located.key,
+    return await this.transitionById(
       input.id,
-      (current) => {
+      (current, now) => {
         this.assertController(current, input);
-        return {
-          ...current,
-          state: "waiting",
-          generation: current.generation + 1,
-          updatedAtMs: now,
-          controllerId: undefined,
-          controllerLeaseExpiresAtMs: undefined,
-        };
+        return endControl(current, "waiting", now);
       },
       assertCurrentAuthority,
     );
@@ -261,12 +244,9 @@ export class HumanInterventionService {
     input: HumanInterventionControlRequest,
     assertCurrentAuthority?: MutationAuthorityGuard,
   ): Promise<HumanInterventionRecord> {
-    const located = await this.requireCurrentLocated(input.id);
-    const now = this.now();
-    return await this.transition(
-      located.key,
+    return await this.transitionById(
       input.id,
-      (current) => {
+      (current, now) => {
         if (current.state === "resume_pending" || current.state === "resumed") {
           return current;
         }
@@ -289,12 +269,9 @@ export class HumanInterventionService {
     id: string,
     assertCurrentAuthority?: MutationAuthorityGuard,
   ): Promise<HumanInterventionRecord> {
-    const located = await this.requireCurrentLocated(id);
-    const now = this.now();
-    return await this.transition(
-      located.key,
+    return await this.transitionById(
       id,
-      (current) => {
+      (current, now) => {
         if (
           current.state === "cancelled" ||
           current.state === "expired" ||
@@ -303,14 +280,7 @@ export class HumanInterventionService {
         ) {
           return current;
         }
-        return {
-          ...current,
-          state: "cancelled",
-          generation: current.generation + 1,
-          updatedAtMs: now,
-          controllerId: undefined,
-          controllerLeaseExpiresAtMs: undefined,
-        };
+        return endControl(current, "cancelled", now);
       },
       assertCurrentAuthority,
     );
@@ -320,9 +290,7 @@ export class HumanInterventionService {
     id: string;
     continuationId: string;
   }): Promise<HumanInterventionRecord> {
-    const located = await this.requireCurrentLocated(input.id);
-    const now = this.now();
-    return await this.transition(located.key, input.id, (current) => {
+    return await this.transitionById(input.id, (current, now) => {
       if (current.state === "resumed" && current.continuationId === input.continuationId) {
         return current;
       }
@@ -381,32 +349,12 @@ export class HumanInterventionService {
     key: string;
     record: HumanInterventionRecord;
   }): Promise<{ key: string; record: HumanInterventionRecord }> {
-    const now = this.now();
-    if (
-      (located.record.state !== "waiting" &&
-        located.record.state !== "control" &&
-        located.record.state !== "resume_pending") ||
-      located.record.expiresAtMs > now
-    ) {
+    if (!canExpire(located.record) || located.record.expiresAtMs > this.now()) {
       return located;
     }
-    const record = await this.transition(located.key, located.record.id, (current) => {
-      if (
-        (current.state !== "waiting" &&
-          current.state !== "control" &&
-          current.state !== "resume_pending") ||
-        current.expiresAtMs > now
-      ) {
-        return current;
-      }
-      return {
-        ...current,
-        state: "expired",
-        generation: current.generation + 1,
-        updatedAtMs: now,
-        controllerId: undefined,
-        controllerLeaseExpiresAtMs: undefined,
-      };
+    const record = await this.transition(located.key, located.record.id, (current, now) => {
+      if (!canExpire(current) || current.expiresAtMs > now) return current;
+      return endControl(current, "expired", now);
     });
     return { key: located.key, record };
   }
@@ -428,10 +376,19 @@ export class HumanInterventionService {
     return entry ? { key: entry.key, record: entry.value } : undefined;
   }
 
+  private async transitionById(
+    id: string,
+    updateValue: (current: HumanInterventionRecord, now: number) => HumanInterventionRecord,
+    assertCurrentAuthority?: MutationAuthorityGuard,
+  ): Promise<HumanInterventionRecord> {
+    const located = await this.requireCurrentLocated(id);
+    return await this.transition(located.key, id, updateValue, assertCurrentAuthority);
+  }
+
   private async transition(
     key: string,
     id: string,
-    updateValue: (current: HumanInterventionRecord) => HumanInterventionRecord,
+    updateValue: (current: HumanInterventionRecord, now: number) => HumanInterventionRecord,
     assertCurrentAuthority?: MutationAuthorityGuard,
   ): Promise<HumanInterventionRecord> {
     let result: HumanInterventionRecord | undefined;
@@ -443,7 +400,8 @@ export class HumanInterventionService {
       }
       try {
         assertCurrentAuthority?.();
-        result = updateValue(current);
+        // Read time at the mutation boundary, after any queued store work.
+        result = updateValue(current, this.now());
         return result;
       } catch (caught) {
         error = caught;
