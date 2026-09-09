@@ -34,12 +34,16 @@ export class HumanInterventionProfileGate {
     });
     let released = false;
     return async () => {
-      if (released) return;
+      if (released) {
+        return;
+      }
       released = true;
       await this.withLock(key, (state) => {
         state.active = Math.max(0, state.active - 1);
         if (state.active === 0) {
-          for (const resolve of state.idleWaiters.splice(0)) resolve();
+          for (const resolve of state.idleWaiters.splice(0)) {
+            resolve();
+          }
         }
       });
       this.cleanup(key);
@@ -69,7 +73,9 @@ export class HumanInterventionProfileGate {
 
   private state(key: string): ProfileGateState {
     const current = this.states.get(key);
-    if (current) return current;
+    if (current) {
+      return current;
+    }
     const created: ProfileGateState = {
       active: 0,
       blocking: false,
@@ -102,7 +108,9 @@ export class HumanInterventionProfileGate {
     let pending: Promise<void> | undefined;
     await this.withLock(key, (state) => {
       if (state.active > 0) {
-        pending = new Promise<void>((resolve) => state.idleWaiters.push(resolve));
+        pending = new Promise<void>((resolve) => {
+          state.idleWaiters.push(resolve);
+        });
       }
     });
     await pending;

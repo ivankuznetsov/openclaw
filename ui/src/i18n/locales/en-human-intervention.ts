@@ -26,7 +26,6 @@ const catalog = {
     sendText: "Send text",
     pressEnter: "Press Enter",
     browserLoading: "Connecting to the browser tab…",
-    browserDisconnected: "The browser stream disconnected. Take control again to reconnect.",
   },
 } satisfies TranslationMap;
 

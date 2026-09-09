@@ -149,7 +149,7 @@ describe("wrapToolWithAbortSignal", () => {
           });
           return textResult("waiting");
         }
-        return await new Promise<never>(() => undefined);
+        return await new Promise<never>(() => {});
       }),
     });
     tool.turnHandoffOwner = (toolCallId) => `browser_human_intervention:${toolCallId}`;

@@ -2,20 +2,20 @@ import type {
   HumanInterventionControlRequest,
   HumanInterventionState,
 } from "@openclaw/gateway-protocol";
-export type { HumanInterventionState } from "@openclaw/gateway-protocol";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 
 const DEFAULT_PENDING_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_CONTROL_LEASE_MS = 60 * 1000;
 const MAX_LOCATED_IDS = 1_000;
 
-export type HumanInterventionOwner = {
+type HumanInterventionOwner = {
   channel: string;
   accountId: string;
   senderId: string;
 };
 
-export type HumanInterventionOrigin = {
+type HumanInterventionOrigin = {
   channel: string;
   accountId?: string;
   to: string;
@@ -64,9 +64,9 @@ type ServiceOptions = {
 
 type MutationAuthorityGuard = () => void;
 
-export class HumanInterventionError extends Error {}
+class HumanInterventionError extends Error {}
 
-export class HumanInterventionNotFoundError extends HumanInterventionError {
+class HumanInterventionNotFoundError extends HumanInterventionError {
   constructor(id: string) {
     super(`Human browser handoff not found: ${id}`);
     this.name = "HumanInterventionNotFoundError";
@@ -358,7 +358,9 @@ export class HumanInterventionService {
       return located;
     }
     const record = await this.transition(located.key, located.record.id, (current, now) => {
-      if (!canExpire(current) || current.expiresAtMs > now) return current;
+      if (!canExpire(current) || current.expiresAtMs > now) {
+        return current;
+      }
       return endControl(current, "expired", now);
     });
     return { key: located.key, record };
@@ -386,14 +388,18 @@ export class HumanInterventionService {
       this.locatedKeys.delete(id);
     }
     const entry = (await this.store.entries()).find((candidate) => candidate.value.id === id);
-    if (entry) this.rememberLocation(id, entry.key);
+    if (entry) {
+      this.rememberLocation(id, entry.key);
+    }
     return entry ? { key: entry.key, record: entry.value } : undefined;
   }
 
   private rememberLocation(id: string, key: string): void {
     if (this.locatedKeys.size >= MAX_LOCATED_IDS && !this.locatedKeys.has(id)) {
       const oldest = this.locatedKeys.keys().next().value;
-      if (oldest !== undefined) this.locatedKeys.delete(oldest);
+      if (oldest !== undefined) {
+        this.locatedKeys.delete(oldest);
+      }
     }
     this.locatedKeys.set(id, key);
   }
@@ -414,7 +420,7 @@ export class HumanInterventionService {
     assertCurrentAuthority?: MutationAuthorityGuard,
   ): Promise<HumanInterventionRecord> {
     let result: HumanInterventionRecord | undefined;
-    let error: unknown;
+    let error: Error | undefined;
     const updated = await this.update(key, (current) => {
       if (!current || current.id !== id) {
         error = new HumanInterventionNotFoundError(id);
@@ -426,7 +432,7 @@ export class HumanInterventionService {
         result = updateValue(current, this.now());
         return result;
       } catch (caught) {
-        error = caught;
+        error = toErrorObject(caught, "Human browser handoff transition failed");
         return undefined;
       }
     });

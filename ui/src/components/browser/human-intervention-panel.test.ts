@@ -38,6 +38,17 @@ function handoff(
   };
 }
 
+function stubWebSockets() {
+  const sockets: TestSocket[] = [];
+  const createSocket = vi.fn(function () {
+    const socket = new TestSocket();
+    sockets.push(socket);
+    return socket;
+  });
+  vi.stubGlobal("WebSocket", createSocket);
+  return { sockets, createSocket };
+}
+
 function createClient() {
   const request = vi.fn(
     async (
@@ -108,15 +119,7 @@ describe("human browser intervention panel", () => {
   });
 
   it("discards a stream ticket that arrives after the panel disconnects", async () => {
-    const socketConstructor = vi.fn(() => new TestSocket());
-    vi.stubGlobal(
-      "WebSocket",
-      class {
-        constructor() {
-          return socketConstructor();
-        }
-      },
-    );
+    const { createSocket: socketConstructor } = stubWebSockets();
     const { client, request } = createClient();
     const panel = await mountPanel(client);
     request.mockResolvedValueOnce(handoff("control", 2));
@@ -131,7 +134,9 @@ describe("human browser intervention panel", () => {
     await waitForFast(() => expect(resolveTicket).toBeTypeOf("function"));
     panel.remove();
     resolveTicket({ wsPath: "/browser/stream" });
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(socketConstructor).not.toHaveBeenCalled();
   });
 
@@ -147,14 +152,7 @@ describe("human browser intervention panel", () => {
 
   it("ignores a renewal response after completion retires control", async () => {
     const intervals = vi.spyOn(globalThis, "setInterval");
-    vi.stubGlobal(
-      "WebSocket",
-      class {
-        constructor() {
-          return new TestSocket();
-        }
-      },
-    );
+    stubWebSockets();
     const { client, request } = createClient();
     const panel = await mountPanel(client);
     panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-take-control]")?.click();
@@ -170,24 +168,21 @@ describe("human browser intervention panel", () => {
     );
     const renew = intervals.mock.calls.find(([, delay]) => delay === 30_000)?.[0];
     expect(renew).toBeTypeOf("function");
-    if (typeof renew === "function") renew();
+    if (typeof renew === "function") {
+      renew();
+    }
     panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-complete]")?.click();
     await waitForFast(() => expect(panel.shadowRoot?.textContent).toContain("return to your chat"));
     resolveRenewal(handoff("control", 2));
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
     expect(panel.shadowRoot?.textContent).toContain("return to your chat");
     expect(panel.shadowRoot?.querySelector("[data-complete]")).toBeNull();
   });
 
   it("uses a new controller identity after the authenticated connection changes", async () => {
-    vi.stubGlobal(
-      "WebSocket",
-      class {
-        constructor() {
-          return new TestSocket();
-        }
-      },
-    );
+    stubWebSockets();
     const first = createClient();
     const panel = await mountPanel(first.client);
     panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-take-control]")?.click();
@@ -225,17 +220,7 @@ describe("human browser intervention panel", () => {
   });
 
   it("claims the exact handoff, opens its scoped stream, and completes with the lease fence", async () => {
-    const sockets: TestSocket[] = [];
-    vi.stubGlobal(
-      "WebSocket",
-      class {
-        constructor() {
-          const socket = new TestSocket();
-          sockets.push(socket);
-          return socket;
-        }
-      },
-    );
+    const { sockets } = stubWebSockets();
     const { client, request } = createClient();
     const panel = await mountPanel(client);
 
@@ -267,14 +252,7 @@ describe("human browser intervention panel", () => {
   });
 
   it("leaves control without resuming the paused agent", async () => {
-    vi.stubGlobal(
-      "WebSocket",
-      class {
-        constructor() {
-          return new TestSocket();
-        }
-      },
-    );
+    stubWebSockets();
     const { client, request } = createClient();
     const panel = await mountPanel(client);
     panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-take-control]")?.click();
@@ -296,14 +274,7 @@ describe("human browser intervention panel", () => {
   it("renews control while the browser stream remains open", async () => {
     const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
     const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval");
-    vi.stubGlobal(
-      "WebSocket",
-      class {
-        constructor() {
-          return new TestSocket();
-        }
-      },
-    );
+    stubWebSockets();
     const { client, request } = createClient();
     const panel = await mountPanel(client);
     panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-take-control]")?.click();
@@ -332,7 +303,6 @@ describe("human browser intervention panel", () => {
   });
 
   it("keeps completion disabled until remote input finishes", async () => {
-    const sockets: TestSocket[] = [];
     vi.stubGlobal(
       "URL",
       class extends URL {
@@ -340,16 +310,7 @@ describe("human browser intervention panel", () => {
         static override revokeObjectURL = vi.fn();
       },
     );
-    vi.stubGlobal(
-      "WebSocket",
-      class {
-        constructor() {
-          const socket = new TestSocket();
-          sockets.push(socket);
-          return socket;
-        }
-      },
-    );
+    const { sockets } = stubWebSockets();
     const { client, request } = createClient();
     const panel = await mountPanel(client);
     panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-take-control]")?.click();

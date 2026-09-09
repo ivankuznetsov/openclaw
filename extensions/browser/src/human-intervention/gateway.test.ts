@@ -11,9 +11,9 @@ function setup(options: { enabled?: boolean } = {}) {
   const handlers = new Map<string, RegisteredHandler>();
   const scopes = new Map<string, string>();
   const api = createTestPluginApi({
-    registerGatewayMethod(method, handler, options) {
+    registerGatewayMethod(method, handler, registrationOptions) {
       handlers.set(method, handler);
-      scopes.set(method, options?.scope ?? "");
+      scopes.set(method, registrationOptions?.scope ?? "");
     },
   });
   const record = {

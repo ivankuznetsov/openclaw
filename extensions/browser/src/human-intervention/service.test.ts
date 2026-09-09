@@ -111,7 +111,9 @@ describe("HumanInterventionService", () => {
     });
     const pending = await request(service);
     const update = store.update;
-    if (!update) throw new Error("atomic update missing");
+    if (!update) {
+      throw new Error("atomic update missing");
+    }
     store.update = async (key, mutate) => {
       now = 1_101;
       return await update(key, mutate);

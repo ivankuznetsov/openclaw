@@ -50,7 +50,7 @@ function normalizeBoundedText(value: string, fallback: string, maxLength: number
   return (normalized || fallback).slice(0, maxLength);
 }
 
-export function buildHumanInterventionLaunchUrl(params: {
+function buildHumanInterventionLaunchUrl(params: {
   publicUrl: string;
   basePath?: string;
   id: string;

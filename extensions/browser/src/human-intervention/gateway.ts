@@ -5,7 +5,10 @@ import type {
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asNullableRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { browserControlAuthoritySignal } from "../browser/control-authority.js";
 import type { HumanInterventionCoordinator } from "./coordinator.js";
 import type { HumanInterventionRecord } from "./service.js";
@@ -26,12 +29,12 @@ function createAuthorityGuard(
   };
 }
 
-function readString(params: Record<string, unknown>, key: string): string {
-  const value = params[key];
-  if (typeof value !== "string" || !value.trim()) {
+function requireHandoffString(params: Record<string, unknown>, key: string): string {
+  const value = normalizeOptionalString(params[key]);
+  if (value === undefined) {
     throw new Error(`${key} is required`);
   }
-  return value.trim();
+  return value;
 }
 
 function readGeneration(params: Record<string, unknown>): number {
@@ -44,8 +47,8 @@ function readGeneration(params: Record<string, unknown>): number {
 
 function readControlRequest(params: Record<string, unknown>): HumanInterventionControlRequest {
   return {
-    id: readString(params, "id"),
-    controllerId: readString(params, "controllerId"),
+    id: requireHandoffString(params, "id"),
+    controllerId: requireHandoffString(params, "controllerId"),
     generation: readGeneration(params),
   };
 }
@@ -146,7 +149,7 @@ export function registerHumanInterventionGatewayMethods(params: {
     }
   };
   registerResultMethod(api, "browser.handoff.get", assertFeatureEnabled, async (request) => ({
-    handoff: present(await coordinator.get(readString(request, "id"))),
+    handoff: present(await coordinator.get(requireHandoffString(request, "id"))),
   }));
   registerResultMethod(
     api,
@@ -156,8 +159,8 @@ export function registerHumanInterventionGatewayMethods(params: {
       handoff: present(
         await coordinator.claim(
           {
-            id: readString(request, "id"),
-            controllerId: readString(request, "controllerId"),
+            id: requireHandoffString(request, "id"),
+            controllerId: requireHandoffString(request, "controllerId"),
           },
           guard,
         ),
@@ -193,7 +196,7 @@ export function registerHumanInterventionGatewayMethods(params: {
     "browser.handoff.cancel",
     assertFeatureEnabled,
     async (request, guard) => ({
-      handoff: present(await coordinator.cancel(readString(request, "id"), guard)),
+      handoff: present(await coordinator.cancel(requireHandoffString(request, "id"), guard)),
     }),
   );
 
@@ -207,45 +210,34 @@ export function registerHumanInterventionGatewayMethods(params: {
         );
         assertCurrentAuthority();
         const control = readControlRequest(request.params);
-        const operation = readString(request.params, "operation");
+        const operation = requireHandoffString(request.params, "operation");
         await coordinator.runBrowserOperation(control, async (record, authoritySignal) => {
           assertCurrentAuthority();
+          let path: string;
+          let body: Record<string, unknown>;
           if (operation === "screencast") {
-            await params.forwardBrowserRequest({
-              ...request,
-              params: {
-                target: "host",
-                method: "POST",
-                path: "/screencast",
-                query: { profile: record.browser.profile },
-                body: {
-                  targetId: record.browser.targetId,
-                  maxWidth: request.params.maxWidth,
-                  maxHeight: request.params.maxHeight,
-                  [browserControlAuthoritySignal]: authoritySignal,
-                },
-              },
-            });
-            return;
+            path = "/screencast";
+            body = {
+              targetId: record.browser.targetId,
+              maxWidth: request.params.maxWidth,
+              maxHeight: request.params.maxHeight,
+            };
+          } else if (operation === "act") {
+            path = "/act";
+            body = sanitizeAction(request.params.action, record.browser.targetId);
+          } else {
+            throw new Error("operation must be screencast or act");
           }
-          if (operation === "act") {
-            const action = sanitizeAction(request.params.action, record.browser.targetId);
-            await params.forwardBrowserRequest({
-              ...request,
-              params: {
-                target: "host",
-                method: "POST",
-                path: "/act",
-                query: { profile: record.browser.profile },
-                body: {
-                  ...action,
-                  [browserControlAuthoritySignal]: authoritySignal,
-                },
-              },
-            });
-            return;
-          }
-          throw new Error("operation must be screencast or act");
+          await params.forwardBrowserRequest({
+            ...request,
+            params: {
+              target: "host",
+              method: "POST",
+              path,
+              query: { profile: record.browser.profile },
+              body: { ...body, [browserControlAuthoritySignal]: authoritySignal },
+            },
+          });
         });
       } catch (error) {
         const message = formatErrorMessage(error);

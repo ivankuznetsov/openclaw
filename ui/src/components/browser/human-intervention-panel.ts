@@ -4,7 +4,7 @@ import type {
   HumanInterventionResponse as HandoffResponse,
   HumanInterventionView,
 } from "@openclaw/gateway-protocol";
-import { css, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
@@ -16,6 +16,7 @@ import {
   BrowserScreencastClient,
   type BrowserScreencastFrame,
 } from "./browser-screencast-client.ts";
+import { humanInterventionStyles } from "./human-intervention-panel.styles.ts";
 
 registerHumanInterventionEnglish();
 
@@ -62,7 +63,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   @state() private busy = false;
   @state() private control: ControlSession | null = null;
   @state() private error = "";
-  @state() private streamStatus: "idle" | "connecting" | "connected" | "closed" = "idle";
+  @state() private streamStatus: "idle" | "connecting" | "connected" = "idle";
   @state() private frameUrl = "";
   @state() private frameWidth = 0;
   @state() private frameHeight = 0;
@@ -81,155 +82,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
     }
   };
 
-  static override styles = css`
-    :host {
-      display: block;
-      min-height: 100dvh;
-      color: var(--text);
-      background: var(--bg);
-    }
-
-    * {
-      box-sizing: border-box;
-    }
-
-    .page {
-      width: min(100%, 920px);
-      min-height: 100dvh;
-      margin: 0 auto;
-      padding: max(20px, var(--safe-area-top, 0px)) max(16px, var(--safe-area-right, 0px))
-        max(24px, var(--safe-area-bottom, 0px)) max(16px, var(--safe-area-left, 0px));
-      display: grid;
-      align-content: start;
-      gap: 16px;
-    }
-
-    header {
-      display: grid;
-      gap: 6px;
-    }
-    h1 {
-      margin: 0;
-      font-size: clamp(22px, 5vw, 32px);
-      line-height: 1.15;
-    }
-    .host {
-      font:
-        600 14px/1.4 ui-monospace,
-        SFMono-Regular,
-        Menlo,
-        monospace;
-      color: var(--muted);
-    }
-    .reason,
-    .status,
-    .error {
-      margin: 0;
-      line-height: 1.45;
-    }
-    .status {
-      color: var(--muted);
-    }
-    .error {
-      color: var(--danger);
-    }
-
-    .viewer {
-      overflow: auto;
-      overscroll-behavior: contain;
-      border: 1px solid var(--border);
-      border-radius: 14px;
-      background: var(--bg-accent);
-      min-height: min(62dvh, 620px);
-      max-height: 68dvh;
-      touch-action: pan-x pan-y;
-    }
-
-    .frame {
-      display: block;
-      width: calc(100% * var(--human-browser-zoom));
-      height: auto;
-      min-height: 240px;
-      object-fit: contain;
-      object-position: top left;
-      user-select: none;
-      -webkit-user-drag: none;
-      touch-action: none;
-    }
-
-    .viewer-empty {
-      min-height: min(62dvh, 620px);
-      display: grid;
-      place-items: center;
-      padding: 24px;
-      color: var(--text-strong);
-      text-align: center;
-    }
-
-    .toolbar,
-    .actions,
-    .text-entry {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-    }
-    .toolbar {
-      justify-content: flex-end;
-    }
-    .actions {
-      padding-top: 4px;
-    }
-    .text-entry input {
-      flex: 1 1 230px;
-      min-width: 0;
-    }
-
-    button,
-    input {
-      min-height: 44px;
-      border-radius: 10px;
-      border: 1px solid var(--border);
-      font: inherit;
-    }
-    button {
-      padding: 0 14px;
-      background: var(--bg-elevated);
-      color: inherit;
-      font-weight: 600;
-    }
-    button.primary {
-      background: var(--accent);
-      border-color: var(--accent);
-      color: var(--accent-foreground);
-    }
-    button.danger {
-      color: var(--danger);
-    }
-    button:disabled {
-      opacity: 0.5;
-      cursor: default;
-    }
-    input {
-      padding: 0 12px;
-      background: var(--bg-elevated);
-      color: inherit;
-    }
-
-    @media (max-width: 640px) {
-      .page {
-        padding-inline: 12px;
-        gap: 12px;
-      }
-      .viewer,
-      .viewer-empty {
-        min-height: 54dvh;
-        max-height: 60dvh;
-      }
-      .actions button {
-        flex: 1 1 auto;
-      }
-    }
-  `;
+  static override styles = humanInterventionStyles;
 
   override connectedCallback(): void {
     super.connectedCallback();
@@ -276,11 +129,17 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   }
 
   private async load(): Promise<void> {
-    if (!this.isConnected) return;
-    if (this.connection && this.isCurrent(this.connection)) return;
+    if (!this.isConnected) {
+      return;
+    }
+    if (this.connection && this.isCurrent(this.connection)) {
+      return;
+    }
     this.resetConnection();
     const client = this.client;
-    if (!client || !this.available || !this.handoffId) return;
+    if (!client || !this.available || !this.handoffId) {
+      return;
+    }
     const connection = { client, id: this.handoffId };
     this.connection = connection;
     this.loading = true;
@@ -289,11 +148,17 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
       const response = await client.request<HandoffResponse>("browser.handoff.get", {
         id: connection.id,
       });
-      if (this.isCurrent(connection)) this.handoff = response.handoff;
+      if (this.isCurrent(connection)) {
+        this.handoff = response.handoff;
+      }
     } catch (error) {
-      if (this.isCurrent(connection)) this.error = formatUiError(error);
+      if (this.isCurrent(connection)) {
+        this.error = formatUiError(error);
+      }
     } finally {
-      if (this.isCurrent(connection)) this.loading = false;
+      if (this.isCurrent(connection)) {
+        this.loading = false;
+      }
     }
   }
 
@@ -316,7 +181,9 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
 
   private async claim(): Promise<void> {
     const connection = this.connection;
-    if (!connection || !this.isCurrent(connection) || !this.handoff || this.busy) return;
+    if (!connection || !this.isCurrent(connection) || !this.handoff || this.busy) {
+      return;
+    }
     this.busy = true;
     this.error = "";
     // A delayed release from a retired claim must never own a later claim.
@@ -345,13 +212,17 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
         session.renewTimer = setInterval(() => void this.renew(activeSession), 30_000);
       }
     } catch (error) {
-      if (this.isCurrent(connection)) this.error = formatUiError(error);
+      if (this.isCurrent(connection)) {
+        this.error = formatUiError(error);
+      }
       if (session && this.ownsControl(session)) {
         this.stopControl(session);
         await this.releaseSession(session).catch(() => {});
       }
     } finally {
-      if (this.isCurrent(connection)) this.busy = false;
+      if (this.isCurrent(connection)) {
+        this.busy = false;
+      }
     }
   }
 
@@ -366,22 +237,31 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
         maxHeight: 2000,
       },
     );
-    if (!this.ownsControl(session)) return;
+    if (!this.ownsControl(session)) {
+      return;
+    }
     session.stream = new BrowserScreencastClient({
       gatewayUrl: session.connection.client.gatewayUrl,
       wsPath: response.wsPath,
       onReady: () => {
-        if (this.ownsControl(session)) this.streamStatus = "connected";
+        if (this.ownsControl(session)) {
+          this.streamStatus = "connected";
+        }
       },
       onMeta: ({ url }) => {
-        if (this.ownsControl(session) && this.framePageUrl && url !== this.framePageUrl)
+        if (this.ownsControl(session) && this.framePageUrl && url !== this.framePageUrl) {
           this.clearFrame();
+        }
       },
       onFrame: (frame) => {
-        if (this.ownsControl(session)) this.presentFrame(frame);
+        if (this.ownsControl(session)) {
+          this.presentFrame(frame);
+        }
       },
       onClose: () => {
-        if (this.ownsControl(session)) void this.leave(false);
+        if (this.ownsControl(session)) {
+          void this.leave(false);
+        }
       },
     });
   }
@@ -393,18 +273,24 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
     this.frameHeight = frame.cssHeight;
     this.framePageUrl = frame.url;
     this.streamStatus = "connected";
-    if (previous) URL.revokeObjectURL(previous);
+    if (previous) {
+      URL.revokeObjectURL(previous);
+    }
   }
 
   private async renew(session: ControlSession): Promise<void> {
-    if (!this.ownsControl(session) || session.renewing) return;
+    if (!this.ownsControl(session) || session.renewing) {
+      return;
+    }
     session.renewing = true;
     try {
       const response = await session.connection.client.request<HandoffResponse>(
         "browser.handoff.renew",
         this.controlParams(session),
       );
-      if (this.ownsControl(session)) this.handoff = response.handoff;
+      if (this.ownsControl(session)) {
+        this.handoff = response.handoff;
+      }
     } catch (error) {
       if (this.ownsControl(session)) {
         this.error = formatUiError(error);
@@ -422,14 +308,18 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
     session.renewTimer = undefined;
     session.stream?.close();
     session.stream = undefined;
-    if (this.control !== session) return;
+    if (this.control !== session) {
+      return;
+    }
     this.control = null;
     this.streamStatus = "idle";
     this.clearFrame();
   }
 
   private clearFrame(): void {
-    if (this.frameUrl) URL.revokeObjectURL(this.frameUrl);
+    if (this.frameUrl) {
+      URL.revokeObjectURL(this.frameUrl);
+    }
     this.frameUrl = "";
     this.frameWidth = 0;
     this.frameHeight = 0;
@@ -446,8 +336,9 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
       session.inputOperation ||
       this.streamStatus !== "connected" ||
       !this.frameUrl
-    )
+    ) {
       return false;
+    }
     this.error = "";
     const operation = this.sendBrowserAction(session, action);
     session.inputOperation = operation;
@@ -456,7 +347,9 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
       return await operation;
     } finally {
       session.inputOperation = undefined;
-      if (this.ownsControl(session)) this.requestUpdate();
+      if (this.ownsControl(session)) {
+        this.requestUpdate();
+      }
     }
   }
 
@@ -472,7 +365,9 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
       });
       return this.ownsControl(session);
     } catch (error) {
-      if (this.ownsControl(session)) this.error = formatUiError(error);
+      if (this.ownsControl(session)) {
+        this.error = formatUiError(error);
+      }
       return false;
     }
   }
@@ -485,7 +380,9 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   }
 
   private pointerDown(event: PointerEvent): void {
-    if (!this.isController() || this.inputBusy || this.busy) return;
+    if (!this.isController() || this.inputBusy || this.busy) {
+      return;
+    }
     this.pointerStart = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
     if (event.currentTarget instanceof HTMLElement) {
       event.currentTarget.setPointerCapture?.(event.pointerId);
@@ -493,12 +390,15 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   }
 
   private pointerUp(event: PointerEvent): void {
-    if (!(event.currentTarget instanceof HTMLImageElement)) return;
+    if (!(event.currentTarget instanceof HTMLImageElement)) {
+      return;
+    }
     const image = event.currentTarget;
     const start = this.pointerStart;
     this.pointerStart = undefined;
-    if (!start || start.pointerId !== event.pointerId || !this.frameWidth || !this.frameHeight)
+    if (!start || start.pointerId !== event.pointerId || !this.frameWidth || !this.frameHeight) {
       return;
+    }
     const bounds = image.getBoundingClientRect();
     const from = resolveHumanBrowserPoint({ clientX: start.x, clientY: start.y }, bounds, {
       width: this.frameWidth,
@@ -526,16 +426,24 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
 
   private async leave(showError = true): Promise<void> {
     const session = this.control;
-    if (!session || !this.ownsControl(session)) return;
+    if (!session || !this.ownsControl(session)) {
+      return;
+    }
     this.busy = true;
     this.stopControl(session);
     try {
       const response = await this.releaseSession(session);
-      if (this.isCurrent(session.connection)) this.handoff = response.handoff;
+      if (this.isCurrent(session.connection)) {
+        this.handoff = response.handoff;
+      }
     } catch (error) {
-      if (showError && this.isCurrent(session.connection)) this.error = formatUiError(error);
+      if (showError && this.isCurrent(session.connection)) {
+        this.error = formatUiError(error);
+      }
     } finally {
-      if (this.isCurrent(session.connection)) this.busy = false;
+      if (this.isCurrent(session.connection)) {
+        this.busy = false;
+      }
     }
   }
 
@@ -544,36 +452,61 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   ): Promise<void> {
     const connection = this.connection;
     const session = this.control;
-    if (!connection || !this.isCurrent(connection) || !this.handoff || this.busy) return;
-    if (method === "browser.handoff.complete" && !session) return;
+    if (!connection || !this.isCurrent(connection) || !this.handoff || this.busy) {
+      return;
+    }
+    if (method === "browser.handoff.complete" && !session) {
+      return;
+    }
     this.busy = true;
     this.error = "";
     try {
       await session?.inputOperation;
-      if (!this.isCurrent(connection)) return;
-      if (session && !this.ownsControl(session)) return;
+      if (!this.isCurrent(connection)) {
+        return;
+      }
+      if (session && !this.ownsControl(session)) {
+        return;
+      }
       const params =
         method === "browser.handoff.complete" && session
           ? this.controlParams(session)
           : { id: connection.id };
       const response = await connection.client.request<HandoffResponse>(method, params);
-      if (!this.isCurrent(connection)) return;
+      if (!this.isCurrent(connection)) {
+        return;
+      }
       this.handoff = response.handoff;
-      if (session) this.stopControl(session);
+      if (session) {
+        this.stopControl(session);
+      }
     } catch (error) {
-      if (this.isCurrent(connection)) this.error = formatUiError(error);
+      if (this.isCurrent(connection)) {
+        this.error = formatUiError(error);
+      }
     } finally {
-      if (this.isCurrent(connection)) this.busy = false;
+      if (this.isCurrent(connection)) {
+        this.busy = false;
+      }
     }
   }
 
   private statusText(): string {
-    if (this.handoff?.state === "resume_pending") return t("humanBrowser.resumePending");
-    if (this.handoff?.state === "resumed") return t("humanBrowser.continuationQueued");
-    if (this.handoff?.state === "cancelled") return t("humanBrowser.cancelled");
-    if (this.handoff?.state === "expired") return t("humanBrowser.expired");
-    if (this.handoff?.state === "control")
+    if (this.handoff?.state === "resume_pending") {
+      return t("humanBrowser.resumePending");
+    }
+    if (this.handoff?.state === "resumed") {
+      return t("humanBrowser.continuationQueued");
+    }
+    if (this.handoff?.state === "cancelled") {
+      return t("humanBrowser.cancelled");
+    }
+    if (this.handoff?.state === "expired") {
+      return t("humanBrowser.expired");
+    }
+    if (this.handoff?.state === "control") {
       return this.isController() ? t("humanBrowser.control") : t("humanBrowser.controlElsewhere");
+    }
     return t("humanBrowser.waiting");
   }
 
@@ -589,16 +522,16 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
         <main class="page">
           ${this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}
           <div class="actions">
-            <button class="primary" data-retry @click=${this.retry}>
+            <button class="primary" data-retry @click=${() => this.retry()}>
               ${t("humanBrowser.retry")}
             </button>
           </div>
         </main>
       `;
     }
-    const terminal =
-      this.handoff &&
-      ["resume_pending", "resumed", "cancelled", "expired"].includes(this.handoff.state);
+    const terminal = ["resume_pending", "resumed", "cancelled", "expired"].includes(
+      this.handoff.state,
+    );
     const controlling = this.isController();
     const browserReady =
       controlling &&
@@ -610,8 +543,8 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
       <main class="page">
         <header>
           <h1>${t("humanBrowser.title")}</h1>
-          ${this.handoff?.hostname ? html`<div class="host">${this.handoff.hostname}</div>` : nothing}
-          ${this.handoff?.reason ? html`<p class="reason">${this.handoff.reason}</p>` : nothing}
+          ${this.handoff.hostname ? html`<div class="host">${this.handoff.hostname}</div>` : nothing}
+          ${this.handoff.reason ? html`<p class="reason">${this.handoff.reason}</p>` : nothing}
           <p class="status" role="status">${this.statusText()}</p>
           ${this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}
         </header>
@@ -667,15 +600,13 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
                           src=${this.frameUrl}
                           alt=${this.handoff?.hostname ?? "Remote browser tab"}
                           draggable="false"
-                          @pointerdown=${this.pointerDown}
-                          @pointerup=${this.pointerUp}
+                          @pointerdown=${(event: PointerEvent) => this.pointerDown(event)}
+                          @pointerup=${(event: PointerEvent) => this.pointerUp(event)}
                           @pointercancel=${() => {
                             this.pointerStart = undefined;
                           }}
                         />`
-                      : html`<div class="viewer-empty">
-                          ${this.streamStatus === "closed" ? t("humanBrowser.browserDisconnected") : t("humanBrowser.browserLoading")}
-                        </div>`
+                      : html`<div class="viewer-empty">${t("humanBrowser.browserLoading")}</div>`
                   }
                 </div>
                 <div class="text-entry">
