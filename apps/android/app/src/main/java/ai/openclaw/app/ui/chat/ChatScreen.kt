@@ -3023,7 +3023,10 @@ internal fun resolveChatEffortPosition(
   return ChatEffortPosition(optionIndex = selectedIndex, fraction = fraction)
 }
 
-internal fun chatEffortNeedleAngle(position: ChatEffortPosition): Float? = position.fraction?.let { 150f + it * 240f }
+internal fun chatEffortNeedleAngle(
+  position: ChatEffortPosition,
+  fastMode: Boolean = false,
+): Float? = if (fastMode) 330f else position.fraction?.let { 180f + it * 120f }
 
 internal fun chatEffortVisualFraction(
   fraction: Float,
@@ -3046,6 +3049,7 @@ private fun ChatThinkingLevelPicker(
   val description = nativeString("Thinking")
   val dialColor = if (enabled) ClawTheme.colors.textMuted else ClawTheme.colors.textSubtle
   val needleColor = if (enabled) ClawTheme.colors.text else ClawTheme.colors.textSubtle
+  val fastZoneColor = ClawTheme.colors.danger.copy(alpha = if (enabled) 1f else 0.5f)
   Surface(
     onClick = onOpen,
     enabled = enabled,
@@ -3058,40 +3062,28 @@ private fun ChatThinkingLevelPicker(
     color = Color.Transparent,
   ) {
     Box(contentAlignment = Alignment.Center) {
-      Box(modifier = Modifier.size(20.dp).testTag("chat-thinking-gauge")) {
-        Canvas(modifier = Modifier.matchParentSize()) {
-          val dialStrokeWidth = 1.5.dp.toPx()
-          val needleStrokeWidth = 2.dp.toPx()
-          // The dial omits its bottom arc; center the visible ink with the other controls.
-          translate(top = size.height / 8f) {
-            drawArc(color = dialColor, startAngle = 150f, sweepAngle = 240f, useCenter = false, style = Stroke(width = dialStrokeWidth, cap = StrokeCap.Round))
-            // An unadvertised effective level is not the minimum/Off position.
-            chatEffortNeedleAngle(position)?.let { angle ->
-              rotate(angle) {
-                drawLine(
-                  color = needleColor,
-                  start = center,
-                  end = Offset(size.width * 0.82f, center.y),
-                  strokeWidth = needleStrokeWidth,
-                  cap = StrokeCap.Round,
-                )
-              }
-              drawCircle(color = needleColor, radius = 1.25.dp.toPx(), center = center)
-            }
-          }
+      Canvas(modifier = Modifier.size(22.dp).testTag("chat-thinking-gauge")) {
+        val radius = size.width * 0.43f
+        val hub = Offset(center.x, size.height * 0.72f)
+        val bounds = Offset(hub.x - radius, hub.y - radius)
+        val dialSize = Size(radius * 2, radius * 2)
+        val stroke = Stroke(width = 2.dp.toPx(), cap = StrokeCap.Butt)
+        for (start in listOf(180f, 225f, 270f)) {
+          drawArc(dialColor, start, 39f, false, bounds, dialSize, style = stroke)
         }
-        if (fastMode) {
-          Box(
-            modifier =
-              Modifier
-                .align(Alignment.BottomEnd)
-                .size(8.dp)
-                .background(ClawTheme.colors.surface, CircleShape)
-                .testTag("chat-fast-mode-badge"),
-            contentAlignment = Alignment.Center,
-          ) {
-            Icon(Icons.Default.Bolt, contentDescription = null, modifier = Modifier.size(7.dp), tint = ClawTheme.colors.primary)
+        drawArc(fastZoneColor, 315f, 45f, false, bounds, dialSize, style = stroke)
+        // Fast mode occupies the red zone; otherwise the needle reflects advertised effort.
+        chatEffortNeedleAngle(position, fastMode)?.let { angle ->
+          rotate(angle, pivot = hub) {
+            drawLine(
+              color = needleColor,
+              start = hub,
+              end = Offset(hub.x + radius * 0.83f, hub.y),
+              strokeWidth = 2.dp.toPx(),
+              cap = StrokeCap.Round,
+            )
           }
+          drawCircle(color = needleColor, radius = 1.5.dp.toPx(), center = hub)
         }
       }
     }

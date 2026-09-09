@@ -3277,7 +3277,7 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun fastModeBadgeBelongsToTheGaugeGeometry() {
+  fun fastModeGaugeRetainsAccessibleStateWithoutAnOverlayBadge() {
     showChat(viewportWidth = 360.dp, viewportHeight = { 640.dp })
     composeRule.runOnIdle {
       controller.handleGatewayEvent(
@@ -3294,18 +3294,13 @@ class ChatComposerLayoutTest {
     }
 
     composeRule.onNodeWithContentDescription(nativeString("Thinking")).assertIsDisplayed()
-    val gauge = composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).getUnclippedBoundsInRoot()
-    val badge = composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).getUnclippedBoundsInRoot()
-    val badgeCenterX = (badge.left.value + badge.right.value) / 2f
-    val badgeCenterY = (badge.top.value + badge.bottom.value) / 2f
-    val gaugeCenterX = (gauge.left.value + gauge.right.value) / 2f
-    val gaugeCenterY = (gauge.top.value + gauge.bottom.value) / 2f
-
-    assertTrue("The Fast mode badge center must stay inside the gauge: $badge in $gauge", badgeCenterX in gauge.left.value..gauge.right.value)
-    assertTrue("The Fast mode badge center must stay inside the gauge: $badge in $gauge", badgeCenterY in gauge.top.value..gauge.bottom.value)
-    assertFalse(
-      "The Fast mode badge must not cover the needle hub: $badge over $gauge",
-      gaugeCenterX in badge.left.value..badge.right.value && gaugeCenterY in badge.top.value..badge.bottom.value,
+    composeRule.onNodeWithTag("chat-thinking-gauge", useUnmergedTree = true).assertIsDisplayed()
+    composeRule.onNodeWithTag("chat-fast-mode-badge", useUnmergedTree = true).assertDoesNotExist()
+    composeRule.onNodeWithContentDescription(nativeString("Thinking")).assert(
+      SemanticsMatcher.expectValue(
+        SemanticsProperties.StateDescription,
+        chatThinkingChipStateDescription(true, "high", listOf(ChatThinkingLevelOption("high", "high"))),
+      ),
     )
   }
 
