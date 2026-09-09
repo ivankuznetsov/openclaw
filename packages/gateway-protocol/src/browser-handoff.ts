@@ -1,4 +1,4 @@
-/** Public, browser-safe wire types for the Browser plugin's handoff methods. */
+/** Wire types shared by browser handoff clients and the Browser plugin. */
 export type HumanInterventionState =
   | "waiting"
   | "control"

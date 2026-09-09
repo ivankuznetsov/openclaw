@@ -1,8 +1,8 @@
 import type {
   HumanInterventionControlRequest,
   HumanInterventionState,
-} from "../../human-intervention-api.js";
-export type { HumanInterventionState } from "../../human-intervention-api.js";
+} from "@openclaw/gateway-protocol";
+export type { HumanInterventionState } from "@openclaw/gateway-protocol";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 
 const DEFAULT_PENDING_TTL_MS = 30 * 60 * 1000;

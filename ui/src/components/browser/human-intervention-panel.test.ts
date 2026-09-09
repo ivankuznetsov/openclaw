@@ -1,9 +1,6 @@
+import type { HumanInterventionResponse, HumanInterventionState } from "@openclaw/gateway-protocol";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  HumanInterventionResponse,
-  HumanInterventionState,
-} from "../../../../extensions/browser/human-intervention-api.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {

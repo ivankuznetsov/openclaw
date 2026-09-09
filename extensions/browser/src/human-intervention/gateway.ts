@@ -1,11 +1,11 @@
+import type {
+  HumanInterventionControlRequest,
+  HumanInterventionView,
+} from "@openclaw/gateway-protocol";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  HumanInterventionControlRequest,
-  HumanInterventionView,
-} from "../../human-intervention-api.js";
 import { browserControlAuthoritySignal } from "../browser/control-authority.js";
 import type { HumanInterventionCoordinator } from "./coordinator.js";
 import type { HumanInterventionRecord } from "./service.js";

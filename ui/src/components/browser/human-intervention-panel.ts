@@ -1,11 +1,11 @@
-import { css, html, nothing } from "lit";
-import { property, state } from "lit/decorators.js";
 import type {
   HumanInterventionControlRequest,
   HumanInterventionInput,
   HumanInterventionResponse as HandoffResponse,
   HumanInterventionView,
-} from "../../../../extensions/browser/human-intervention-api.ts";
+} from "@openclaw/gateway-protocol";
+import { css, html, nothing } from "lit";
+import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerHumanInterventionEnglish } from "../../i18n/locales/en-human-intervention.ts";

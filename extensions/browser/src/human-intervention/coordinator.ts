@@ -1,8 +1,8 @@
+import type { HumanInterventionControlRequest } from "@openclaw/gateway-protocol";
 import type {
   OpenClawPluginApi,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { HumanInterventionControlRequest } from "../../human-intervention-api.js";
 import { HumanInterventionProfileGate } from "./profile-gate.js";
 import {
   HumanInterventionService,
