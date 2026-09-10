@@ -38,9 +38,7 @@ export function captureHandoffAccess(): HandoffAccess | null {
   } catch {
     // A fresh link still gets a useful storage error rather than gateway login.
   }
-  if (!supplied && !saved.token && !saved.sessionToken) {
-    return null;
-  }
+  // A missing credential must stay in the handoff viewer, never boot Gateway administration.
   const access: HandoffAccess = { id, basePath, storageKey, ...saved };
   if (supplied) {
     access.token = token;

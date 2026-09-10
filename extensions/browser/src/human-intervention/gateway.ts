@@ -97,6 +97,12 @@ export function sanitizeAction(value: unknown, targetId: string): Record<string,
   if (kind === "press") {
     return { kind, targetId, key: action.key };
   }
+  if (kind === "insertText") {
+    if (typeof action.text !== "string" || action.text.length > 4096) {
+      throw new Error("human browser text must be at most 4096 characters");
+    }
+    return { kind: "type", targetId, selector: ":focus", text: action.text, insertText: true };
+  }
   if (kind === "type") {
     return {
       kind,
@@ -106,7 +112,9 @@ export function sanitizeAction(value: unknown, targetId: string): Record<string,
       ...(action.submit === true ? { submit: true } : {}),
     };
   }
-  throw new Error("human browser input supports only clickCoords, dragCoords, press, and type");
+  throw new Error(
+    "human browser input supports only clickCoords, dragCoords, press, insertText, and type",
+  );
 }
 
 function registerResultMethod(

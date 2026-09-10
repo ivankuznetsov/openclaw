@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { z } from "zod";
 import {
+  type BrowserTabCleanupGate,
   getBrowserStateRuntime,
   getOptionalBrowserStateRuntime,
   setBrowserStateRuntime,
@@ -67,13 +68,16 @@ type BrowserSessionTabStoreRuntime = {
 };
 
 /** Opens and publishes Browser's canonical durable tab store during plugin registration. */
-export function initializeBrowserSessionTabStore(runtime: BrowserSessionTabStoreRuntime): void {
+export function initializeBrowserSessionTabStore(
+  runtime: BrowserSessionTabStoreRuntime,
+  tabCleanupGate?: BrowserTabCleanupGate,
+): void {
   const sessionTabs = runtime.state.openSyncKeyedStore<unknown>({
     namespace: BROWSER_SESSION_TABS_NAMESPACE,
     maxEntries: BROWSER_SESSION_TABS_MAX_ENTRIES,
     overflowPolicy: "reject-new",
   });
-  setBrowserStateRuntime({ sessionTabs });
+  setBrowserStateRuntime({ sessionTabs, tabCleanupGate });
   resetDurableTabAliases();
   for (const entry of sessionTabs.entries()) {
     const record = parseBrowserSessionTabRecord(entry.value);

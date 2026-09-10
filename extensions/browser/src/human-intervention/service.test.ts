@@ -238,10 +238,10 @@ describe("HumanInterventionService", () => {
         generation: claimed.generation,
       }),
     ).rejects.toBeInstanceOf(HumanInterventionConflictError);
-    await expect(service.get(pending.id)).resolves.toMatchObject({
-      state: "expired",
-      controllerId: undefined,
-    });
+    const expired = await service.get(pending.id);
+    expect(expired.state).toBe("expired");
+    expect(expired).not.toHaveProperty("controllerId");
+    expect(expired).not.toHaveProperty("controllerLeaseExpiresAtMs");
     await expect(
       service.getProfileReservation({ target: "host", profile: "openclaw", targetId: "tab-1" }),
     ).resolves.toBeUndefined();

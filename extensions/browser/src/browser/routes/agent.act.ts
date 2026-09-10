@@ -345,6 +345,9 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
     case "dragCoords":
       return "dragCoords is not supported for existing-session browser profiles";
     case "type":
+      if (action.insertText) {
+        return "insertText is not supported for existing-session browser profiles";
+      }
       if (action.selector) {
         return EXISTING_SESSION_LIMITS.act.typeSelector;
       }
@@ -719,6 +722,7 @@ export function registerBrowserAgentActRoutes(
             action,
             targetId: tab.targetId,
             evaluateEnabled,
+            includeInputFocus: Boolean(authorityBoundSignal),
             ...navigationPolicy,
             signal,
             assertCurrent,
@@ -734,6 +738,11 @@ export function registerBrowserAgentActRoutes(
             });
           }
           const downloads = result.downloads;
+          const inputMetadata =
+            typeof result.focusedEditable === "boolean"
+              ? { focusedEditable: result.focusedEditable }
+              : {};
+          const actionMetadata = { ...(downloads ? { downloads } : {}), ...inputMetadata };
           if (action.kind === "close" || result.aborted?.reason === "closed") {
             clearSnapshotKeysForTab(ctx, profileCtx.profile.name, tab.targetId);
           }
@@ -758,12 +767,12 @@ export function registerBrowserAgentActRoutes(
             case "click":
             case "clickCoords":
             case "dragCoords":
-              return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
+              return await jsonOk(actionMetadata, resultTargetOptions);
             case "resize":
             case "close":
               return await jsonOk(downloads ? { downloads } : undefined);
             default:
-              return await jsonOk(downloads ? { downloads } : undefined, resultTargetOptions);
+              return await jsonOk(actionMetadata, resultTargetOptions);
           }
         } finally {
           await resolveRelayTarget?.release();

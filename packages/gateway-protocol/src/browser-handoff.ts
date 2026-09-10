@@ -31,4 +31,5 @@ export type HumanInterventionInput =
   | { kind: "clickCoords"; x: number; y: number; doubleClick?: boolean }
   | { kind: "dragCoords"; x: number; y: number; endX: number; endY: number }
   | { kind: "press"; key: string }
+  | { kind: "insertText"; text: string }
   | { kind: "type"; text: string; submit?: boolean };

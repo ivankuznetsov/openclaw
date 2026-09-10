@@ -85,8 +85,7 @@ export const humanInterventionStyles = css`
   }
 
   .toolbar,
-  .actions,
-  .text-entry {
+  .actions {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
@@ -97,19 +96,22 @@ export const humanInterventionStyles = css`
   .actions {
     padding-top: 4px;
   }
-  .text-entry input {
-    flex: 1 1 230px;
-    min-width: 0;
+  .canvas-keyboard {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    opacity: 0;
+    font-size: 16px;
   }
 
-  button,
-  input {
+  button {
     min-height: 44px;
     border-radius: 10px;
     border: 1px solid var(--border);
     font: inherit;
-  }
-  button {
     padding: 0 14px;
     background: var(--bg-elevated);
     color: inherit;
@@ -126,11 +128,6 @@ export const humanInterventionStyles = css`
   button:disabled {
     opacity: 0.5;
     cursor: default;
-  }
-  input {
-    padding: 0 12px;
-    background: var(--bg-elevated);
-    color: inherit;
   }
 
   @media (max-width: 640px) {

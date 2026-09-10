@@ -66,6 +66,11 @@ describe("canonicalizeActTargetIds", () => {
 });
 
 describe("normalizeActRequest keyboard keys", () => {
+  it("preserves explicit caret insertion without changing default fill mode", () => {
+    const input = { kind: "type", selector: ":focus", text: "a" };
+    expect(normalizeActRequest(input)).not.toHaveProperty("insertText");
+    expect(normalizeActRequest({ ...input, insertText: true })).toMatchObject({ insertText: true });
+  });
   it.each([
     ["Esc", "Escape"],
     ["ESC", "Escape"],

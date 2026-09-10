@@ -252,6 +252,7 @@ export async function typeViaPlaywright(
     text: string;
     submit?: boolean;
     slowly?: boolean;
+    insertText?: boolean;
   },
 ): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -263,7 +264,12 @@ export async function typeViaPlaywright(
     page,
     opts,
     async (signal) => {
-      if (opts.slowly) {
+      if (opts.insertText) {
+        // Canvas keyboard chunks preserve the focused field selection and caret.
+        throwIfInteractionAborted(opts.signal);
+        opts.assertCurrent?.();
+        await page.keyboard.insertText(text);
+      } else if (opts.slowly) {
         await locator.click({ timeout, signal });
         throwIfInteractionAborted(opts.signal);
         opts.assertCurrent?.();

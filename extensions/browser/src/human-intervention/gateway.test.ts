@@ -232,31 +232,39 @@ describe("human intervention gateway", () => {
     expect(forwardBrowserRequest).not.toHaveBeenCalled();
   });
 
-  it("allows a coordinate drag only on the handoff-bound tab and authority lease", async () => {
-    const { handlers, forwardBrowserRequest, authoritySignal } = setup();
-    const response = await call(handlers.get("browser.handoff.browser"), {
-      id: "handoff-1",
-      controllerId: "phone-a",
-      generation: 2,
-      operation: "act",
+  it.each([
+    {
       action: { kind: "dragCoords", x: 12, y: 24, endX: 120, endY: 240, targetId: "other" },
-    });
-    expect(response.ok).toBe(true);
-    expect(forwardBrowserRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({
-          path: "/act",
-          body: {
-            kind: "dragCoords",
-            targetId: "tab-1",
-            x: 12,
-            y: 24,
-            endX: 120,
-            endY: 240,
-            [browserControlAuthoritySignal]: authoritySignal,
-          },
+      expected: { kind: "dragCoords", x: 12, y: 24, endX: 120, endY: 240 },
+    },
+    {
+      action: { kind: "insertText", text: "hello", targetId: "other", selector: "#other" },
+      expected: { kind: "type", text: "hello", selector: ":focus", insertText: true },
+    },
+  ])(
+    "allows $action.kind only on the handoff-bound tab and authority lease",
+    async ({ action, expected }) => {
+      const { handlers, forwardBrowserRequest, authoritySignal } = setup();
+      const response = await call(handlers.get("browser.handoff.browser"), {
+        id: "handoff-1",
+        controllerId: "phone-a",
+        generation: 2,
+        operation: "act",
+        action,
+      });
+      expect(response.ok).toBe(true);
+      expect(forwardBrowserRequest).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: expect.objectContaining({
+            path: "/act",
+            body: {
+              ...expected,
+              targetId: "tab-1",
+              [browserControlAuthoritySignal]: authoritySignal,
+            },
+          }),
         }),
-      }),
-    );
-  });
+      );
+    },
+  );
 });

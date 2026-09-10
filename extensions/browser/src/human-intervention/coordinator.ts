@@ -5,6 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { HumanInterventionProfileGate } from "./profile-gate.js";
 import {
+  HumanInterventionConflictError,
   HumanInterventionService,
   type HumanInterventionBrowser,
   type HumanInterventionRecord,
@@ -244,6 +245,19 @@ export class HumanInterventionCoordinator {
     } catch (error) {
       this.options.onRetryError?.(error);
       this.scheduleRetry();
+    }
+  }
+
+  async beginTabCleanup(
+    browser: HumanInterventionBrowser,
+  ): Promise<(() => Promise<void>) | undefined> {
+    try {
+      return await this.beginAutomation(browser);
+    } catch (error) {
+      if (error instanceof HumanInterventionConflictError) {
+        return undefined;
+      }
+      throw error;
     }
   }
 

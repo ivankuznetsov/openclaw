@@ -45,6 +45,22 @@ function mockEndpoint() {
 }
 
 describe("scoped handoff links", () => {
+  it("keeps a bare handoff URL out of the administrative app", async () => {
+    history.replaceState(null, "", "/custom/focus/browser/test");
+    const access = captureHandoffAccess();
+    expect(access).toMatchObject({ id: "test", basePath: "/custom" });
+    const fetchMock = mockEndpoint();
+    vi.stubGlobal("fetch", fetchMock);
+    mountHandoffLinkPage(document.body, access!);
+    const page = document.body.firstElementChild!;
+    await waitForFast(() => expect(page.shadowRoot?.querySelector("button")).not.toBeNull());
+    page.shadowRoot!.querySelector("button")!.click();
+    await waitForFast(() =>
+      expect(page.shadowRoot?.querySelector('[role="alert"]')).not.toBeNull(),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("removes the capability from history, survives reload, and redeems only after Take control", async () => {
     const fetchMock = mockEndpoint();
     vi.stubGlobal("fetch", fetchMock);

@@ -53,13 +53,12 @@ When the agent encounters a CAPTCHA, login/2FA, or another step only you can com
 3. Sends the site hostname, short reason, and HTTPS link to the originating direct chat.
 4. Keeps the browser process, profile, and tab alive while the task is paused.
 
-Open the link and select **Take control**. The page supports taps, drags, page scrolling, local zoom, keyboard keys, and text entry into the focused remote field. It does not expose browser navigation commands, evaluation, cookies, files, shell access, or other browser profiles. Clicking links or typing into the page can still navigate within the selected tab; access is scoped to the tab, not to one website.
+Open the link and select **Take control**. The page supports taps, drags, page scrolling, local zoom, and direct keyboard input. On a touch screen, tap a text field to select it, then tap it again when prompted to open the keyboard. Drag with one finger to move page elements and swipe with two fingers to scroll the remote page. It does not expose browser navigation commands, evaluation, cookies, files, shell access, or other browser profiles. Clicking links or typing into the page can still navigate within the selected tab; access is scoped to the tab, not to one website.
 
 - **Done — continue agent** revokes human input and schedules the original session to inspect fresh page state before continuing.
-- **Leave paused** releases the controller while preserving the handoff and browser reservation.
 - **Cancel handoff** ends the handoff without resuming the task.
 
-Closing or backgrounding the page leaves the task paused. A controller lease also expires after a disconnect. Return to the same browser tab to take control again. An already-redeemed link cannot be used to authorize another browser; if you close the tab and lose its session storage, request a new handoff or use an authenticated administrator viewer. Handoffs expire after 30 minutes by default.
+Closing or backgrounding the page leaves the task paused. A controller lease also expires after a disconnect. Return to the same browser tab to take control again. An already-redeemed link cannot be used to authorize another browser; if you close the tab and lose its session storage, the existing handoff must end before a new one can be created. An authenticated administrator can cancel it, or you can wait for it to expire (30 minutes by default).
 
 After completion, **waiting to be queued** means continuation admission is still pending. **Queued to continue** means the Gateway has durably accepted the continuation; it does not mean the agent has already started or finished. Select **Refresh status** while admission is pending to check whether it has been queued, and watch the originating chat for the task result.
 
@@ -77,9 +76,9 @@ For a basic control test, start with a harmless form page that does not require 
 
 ## Limits
 
-- The first version supports OpenClaw-managed host browser profiles. Existing-session, sandbox, and node-routed profiles do not advertise the handoff action.
+- The first version supports OpenClaw-managed host browser profiles. Handoff creation is unavailable for existing-session, sandbox, and node-routed browsers.
 - The reservation fences browser operations that participate in the Browser plugin gate. It cannot stop an unrelated process with direct OS or CDP access.
 - Native browser dialogs, audio-only challenges, and a verification flow that switches to an unbound popup may require a different supported surface.
 - The Gateway must remain running and the remote browser tab must remain alive.
 
-If no handoff link appears, verify browser-tool access, `browser.humanIntervention.enabled`, `gateway.publicOrigin`, direct-chat owner authorization, and managed-profile selection. If the page opens at the sign-in screen, reopen the complete new link from the chat; older links without a handoff credential still use the administrator sign-in flow. If the link has expired or was already used in another browser, ask for a new handoff.
+If no handoff link appears, verify browser-tool access, `browser.humanIntervention.enabled`, `gateway.publicOrigin`, direct-chat owner authorization, and managed-profile selection. A handoff URL without a credential stays on the handoff page and asks for a fresh link. Opening the Gateway root separately still uses normal Gateway authentication, including any administrator login already saved in that browser. If the link has expired or was already used in another browser, end the existing handoff or wait for its expiry before requesting a new one. A failed request does not issue a new link; the agent must report the failure rather than construct a URL.

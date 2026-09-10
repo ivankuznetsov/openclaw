@@ -114,14 +114,16 @@ function endControl(
   state: "waiting" | "cancelled" | "expired",
   now: number,
 ): HumanInterventionRecord {
-  return {
+  const next: HumanInterventionRecord = {
     ...current,
     state,
     generation: current.generation + 1,
     updatedAtMs: now,
-    controllerId: undefined,
-    controllerLeaseExpiresAtMs: undefined,
   };
+  // Plugin state accepts JSON values only; absent authority must be omitted.
+  delete next.controllerId;
+  delete next.controllerLeaseExpiresAtMs;
+  return next;
 }
 
 function defaultRandomId(): string {
@@ -171,7 +173,7 @@ export class HumanInterventionService {
     if (!updated) {
       if (conflict) {
         throw new HumanInterventionConflictError(
-          `Browser profile ${input.browser.profile} already has an active handoff`,
+          `Browser profile ${input.browser.profile} already has an active handoff. No new link was issued. Complete or cancel the existing handoff before requesting another; do not construct a replacement URL.`,
         );
       }
       throw new HumanInterventionConflictError(
@@ -364,15 +366,16 @@ export class HumanInterventionService {
           return current;
         }
         this.assertController(current, input);
-        return {
+        const next: HumanInterventionRecord = {
           ...current,
           state: "resume_pending",
           generation: current.generation + 1,
           updatedAtMs: now,
           completedAtMs: now,
           continuationId: this.randomId(),
-          controllerLeaseExpiresAtMs: undefined,
         };
+        delete next.controllerLeaseExpiresAtMs;
+        return next;
       },
       assertCurrentAuthority,
     );
@@ -410,14 +413,15 @@ export class HumanInterventionService {
       if (current.state !== "resume_pending" || current.continuationId !== input.continuationId) {
         throw new HumanInterventionConflictError("Continuation no longer owns this handoff");
       }
-      return {
+      const next: HumanInterventionRecord = {
         ...current,
         state: "resumed",
         generation: current.generation + 1,
         updatedAtMs: now,
         resumedAtMs: now,
-        controllerId: undefined,
       };
+      delete next.controllerId;
+      return next;
     });
   }
 

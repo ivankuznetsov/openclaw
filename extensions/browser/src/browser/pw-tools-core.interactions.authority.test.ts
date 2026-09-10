@@ -3,13 +3,50 @@ import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
   setPwToolsCoreCurrentPage,
+  setPwToolsCoreCurrentRefLocator,
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-const { clickCoordsViaPlaywright, dragCoordsViaPlaywright } =
+const { clickCoordsViaPlaywright, dragCoordsViaPlaywright, typeViaPlaywright } =
   await import("./pw-tools-core.interactions.actions.js");
 
 describe("human input authority", () => {
+  it("inserts chunks, preserves default fill, and rechecks authority after page resolution", async () => {
+    const fill = vi.fn();
+    const insertText = vi.fn();
+    const page = { url: () => "https://example.test", keyboard: { insertText } };
+    setPwToolsCoreCurrentPage(page);
+    setPwToolsCoreCurrentRefLocator({ fill });
+    const options = { cdpUrl: "http://localhost:18792", targetId: "T1", ref: "1" };
+    for (const text of ["a", "b"]) {
+      await typeViaPlaywright({ ...options, text, insertText: true });
+    }
+    expect(insertText.mock.calls).toEqual([["a"], ["b"]]);
+    expect(fill).not.toHaveBeenCalled();
+    await typeViaPlaywright({ ...options, text: "replacement" });
+    expect(fill).toHaveBeenCalledWith("replacement", expect.any(Object));
+
+    let current = true;
+    getPwToolsCoreSessionMocks().getPageForTargetId.mockImplementationOnce(async () => {
+      current = false;
+      return page;
+    });
+    await expect(
+      typeViaPlaywright({
+        ...options,
+        text: "c",
+        insertText: true,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("requester revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("requester revoked");
+    expect(insertText).toHaveBeenCalledTimes(2);
+    expect(fill).toHaveBeenCalledTimes(1);
+  });
+
   it.each(["move", "down"])(
     "stops a drag revoked during %s and releases a pressed button",
     async (stage) => {

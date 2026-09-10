@@ -94,6 +94,7 @@ function createApi() {
     rootDir: "/plugins/browser",
     config: {},
     runtime: {
+      config: {},
       state: { openKeyedStore, openSyncKeyedStore },
     } as unknown as OpenClawPluginApi["runtime"],
     registerCli,
@@ -173,6 +174,7 @@ describe("browser plugin", () => {
       chatType: "direct" as const,
       requesterSenderId: "42",
       deliveryContext: { channel: "telegram", to: "42" },
+      delivery: { send: vi.fn(async () => undefined) },
       yieldTurn: vi.fn(async () => undefined),
     };
     const directTools = ["telegram", "imessage", "whatsapp"].map((channel) =>
@@ -186,6 +188,7 @@ describe("browser plugin", () => {
       }),
     );
     const ownerTool = directTools[0];
+    const noDeliveryTool = factory({ ...common, senderIsOwner: true, delivery: undefined });
     const guestTool = factory({ ...common, senderIsOwner: false });
     const groupTool = factory({
       ...common,
@@ -194,6 +197,8 @@ describe("browser plugin", () => {
       sessionKey: "agent:main:telegram:group:42",
     });
     if (
+      !noDeliveryTool ||
+      Array.isArray(noDeliveryTool) ||
       !ownerTool ||
       Array.isArray(ownerTool) ||
       !guestTool ||
@@ -214,6 +219,7 @@ describe("browser plugin", () => {
       }
       expect(actions(directTool)).toContain("handoff");
     }
+    expect(actions(noDeliveryTool)).not.toContain("handoff");
     expect(actions(guestTool)).not.toContain("handoff");
     expect(actions(groupTool)).not.toContain("handoff");
     const disabledUiTool = factory({

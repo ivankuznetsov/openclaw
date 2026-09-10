@@ -247,6 +247,7 @@ export function normalizeActRequest(
         ...(targetId ? { targetId } : {}),
         ...(submit !== undefined ? { submit } : {}),
         ...(slowly !== undefined ? { slowly } : {}),
+        ...(body.insertText === true ? { insertText: true } : {}),
         ...(timeoutMs !== undefined ? { timeoutMs } : {}),
       };
     }

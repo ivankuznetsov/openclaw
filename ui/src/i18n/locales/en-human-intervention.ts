@@ -35,6 +35,8 @@ const catalog = {
     typePlaceholder: "Type into the focused field",
     sendText: "Send text",
     pressEnter: "Press Enter",
+    tapAgainToType: "Tap the field again to type.",
+    gestureHint: "Use two fingers to scroll. Drag with one finger.",
     browserLoading: "Connecting to the browser tab…",
   },
 } satisfies TranslationMap;

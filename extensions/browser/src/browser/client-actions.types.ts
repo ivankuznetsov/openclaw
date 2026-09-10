@@ -50,6 +50,8 @@ export type BrowserActRequest =
       targetId?: string;
       submit?: boolean;
       slowly?: boolean;
+      /** Insert at the current caret instead of replacing the field. */
+      insertText?: boolean;
       timeoutMs?: number;
     }
   | { kind: "press"; key: string; targetId?: string; delayMs?: number }

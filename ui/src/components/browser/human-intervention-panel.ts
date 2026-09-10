@@ -16,6 +16,13 @@ import {
   type BrowserScreencastFrame,
 } from "./browser-screencast-client.ts";
 import type { HumanInterventionClient } from "./handoff-http-client.ts";
+import {
+  HumanBrowserPointerGesture,
+  isSameHumanBrowserPoint,
+  humanBrowserBeforeInput,
+  humanBrowserTextInput,
+  humanBrowserKeyInput,
+} from "./human-intervention-input.ts";
 import { humanInterventionStyles } from "./human-intervention-panel.styles.ts";
 
 registerHumanInterventionEnglish();
@@ -32,25 +39,6 @@ type ControlSession = {
   renewing: boolean;
   inputOperation?: Promise<boolean>;
 };
-
-export function resolveHumanBrowserPoint(
-  point: { clientX: number; clientY: number },
-  bounds: Pick<DOMRect, "left" | "top" | "width" | "height">,
-  remote: { width: number; height: number },
-): { x: number; y: number } {
-  const displayedWidth = Math.max(1, bounds.width);
-  const displayedHeight = Math.max(1, bounds.height);
-  return {
-    x: Math.max(
-      0,
-      Math.min(remote.width, ((point.clientX - bounds.left) / displayedWidth) * remote.width),
-    ),
-    y: Math.max(
-      0,
-      Math.min(remote.height, ((point.clientY - bounds.top) / displayedHeight) * remote.height),
-    ),
-  };
-}
 
 export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   @property({ attribute: false }) client: HumanInterventionClient | null = null;
@@ -69,10 +57,11 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   @state() private frameWidth = 0;
   @state() private frameHeight = 0;
   @state() private zoom = 1;
-  @state() private textDraft = "";
 
   private connection: ViewerConnection | null = null;
-  private pointerStart?: { x: number; y: number; pointerId: number };
+  private readonly pointerGesture = new HumanBrowserPointerGesture();
+  @state() private armedTouch?: { x: number; y: number };
+  private focusEpoch = 0;
   private framePageUrl = "";
   private get inputBusy(): boolean {
     return Boolean(this.control?.inputOperation);
@@ -125,7 +114,6 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
       void this.releaseSession(session).catch(() => {});
     }
     this.busy = false;
-    this.textDraft = "";
     this.handoff = null;
   }
 
@@ -272,6 +260,9 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   }
 
   private presentFrame(frame: BrowserScreencastFrame): void {
+    if (this.framePageUrl && frame.url !== this.framePageUrl) {
+      this.clearFrame();
+    }
     const previous = this.frameUrl;
     this.frameUrl = URL.createObjectURL(frame.blob);
     this.frameWidth = frame.cssWidth;
@@ -329,10 +320,14 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
     this.frameWidth = 0;
     this.frameHeight = 0;
     this.framePageUrl = "";
-    this.pointerStart = undefined;
+    this.pointerGesture.clear();
+    this.clearTouchKeyboard();
   }
 
-  private async act(action: HumanInterventionInput): Promise<boolean> {
+  private async act(
+    action: HumanInterventionInput,
+    tap?: { touch: boolean; epoch: number },
+  ): Promise<boolean> {
     const session = this.control;
     if (
       !session ||
@@ -345,7 +340,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
       return false;
     }
     this.error = "";
-    const operation = this.sendBrowserAction(session, action);
+    const operation = this.sendBrowserAction(session, action, tap);
     session.inputOperation = operation;
     this.requestUpdate();
     try {
@@ -361,64 +356,134 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   private async sendBrowserAction(
     session: ControlSession,
     action: HumanInterventionInput,
+    tap?: { touch: boolean; epoch: number },
   ): Promise<boolean> {
     try {
-      await session.connection.client.request("browser.handoff.browser", {
-        ...this.controlParams(session),
-        operation: "act",
-        action,
-      });
+      const response = await session.connection.client.request<{ focusedEditable?: boolean }>(
+        "browser.handoff.browser",
+        {
+          ...this.controlParams(session),
+          operation: "act",
+          action,
+        },
+      );
+      if (
+        this.ownsControl(session) &&
+        action.kind === "clickCoords" &&
+        tap?.epoch === this.focusEpoch
+      ) {
+        const keyboard = this.shadowRoot?.querySelector<HTMLTextAreaElement>(".canvas-keyboard");
+        if (response.focusedEditable === true) {
+          if (tap.touch) {
+            this.armedTouch = { x: action.x, y: action.y };
+          } else {
+            keyboard?.focus({ preventScroll: true });
+          }
+        } else {
+          this.clearTouchKeyboard();
+          keyboard?.blur();
+        }
+      }
       return this.ownsControl(session);
     } catch (error) {
       if (this.ownsControl(session)) {
         this.error = formatUiError(error);
+        if (action.kind === "clickCoords") {
+          this.clearTouchKeyboard();
+          this.shadowRoot?.querySelector<HTMLTextAreaElement>(".canvas-keyboard")?.blur();
+        }
       }
       return false;
     }
   }
 
-  private async sendText(): Promise<void> {
-    const text = this.textDraft;
-    if (text && (await this.act({ kind: "type", text })) && this.textDraft === text) {
-      this.textDraft = "";
+  private keyboardQueue: Promise<void> = Promise.resolve();
+  @state() private keyboardPending = 0;
+
+  private queueKeyboard(action: HumanInterventionInput | undefined): void {
+    if (!action) {
+      return;
     }
+    const session = this.control;
+    if (!session || this.busy) {
+      return;
+    }
+    if (this.keyboardPending >= 128) {
+      this.error = t("humanBrowser.linkRequestError");
+      this.stopControl(session);
+      void this.releaseSession(session).catch(() => {});
+      return;
+    }
+    this.armedTouch = undefined;
+    const epoch = this.focusEpoch;
+    this.keyboardPending += 1;
+    this.keyboardQueue = this.keyboardQueue.then(async () => {
+      try {
+        await session.inputOperation;
+        if (epoch !== this.focusEpoch) {
+          return;
+        }
+        if (this.ownsControl(session) && !(await this.act(action)) && this.ownsControl(session)) {
+          // A failed chunk makes later text unsafe to replay into an unknown caret state.
+          this.stopControl(session);
+          await this.releaseSession(session).catch(() => {});
+        }
+      } finally {
+        this.keyboardPending -= 1;
+      }
+    });
+  }
+
+  private clearTouchKeyboard(): void {
+    this.armedTouch = undefined;
+    this.focusEpoch += 1;
   }
 
   private pointerDown(event: PointerEvent): void {
-    if (!this.isController() || this.inputBusy || this.busy) {
+    if (!this.isController() || this.inputBusy || this.busy || this.keyboardPending > 0) {
+      this.clearTouchKeyboard();
       return;
     }
-    this.pointerStart = { x: event.clientX, y: event.clientY, pointerId: event.pointerId };
-    if (event.currentTarget instanceof HTMLElement) {
-      event.currentTarget.setPointerCapture?.(event.pointerId);
+    if (this.pointerGesture.down(event)) {
+      this.clearTouchKeyboard();
     }
   }
 
+  private cancelPointers(): void {
+    this.pointerGesture.clear();
+    this.clearTouchKeyboard();
+  }
+
   private pointerUp(event: PointerEvent): void {
-    if (!(event.currentTarget instanceof HTMLImageElement)) {
+    const remote = { width: this.frameWidth, height: this.frameHeight };
+    const action = this.pointerGesture.up(event, remote);
+    if (!action) {
       return;
     }
-    const image = event.currentTarget;
-    const start = this.pointerStart;
-    this.pointerStart = undefined;
-    if (!start || start.pointerId !== event.pointerId || !this.frameWidth || !this.frameHeight) {
-      return;
+    const touch = event.pointerType === "touch";
+    const activate =
+      action.kind === "clickCoords" &&
+      touch &&
+      this.armedTouch &&
+      event.currentTarget instanceof HTMLImageElement &&
+      isSameHumanBrowserPoint(
+        this.armedTouch,
+        action,
+        event.currentTarget.getBoundingClientRect(),
+        remote,
+      );
+    this.clearTouchKeyboard();
+    if (activate && this.isController() && !this.inputBusy && !this.busy) {
+      // Mobile keyboards require focus in the trusted tap handler, before an await.
+      this.shadowRoot
+        ?.querySelector<HTMLTextAreaElement>(".canvas-keyboard")
+        ?.focus({ preventScroll: true });
     }
-    const bounds = image.getBoundingClientRect();
-    const from = resolveHumanBrowserPoint({ clientX: start.x, clientY: start.y }, bounds, {
-      width: this.frameWidth,
-      height: this.frameHeight,
-    });
-    const to = resolveHumanBrowserPoint(event, bounds, {
-      width: this.frameWidth,
-      height: this.frameHeight,
-    });
-    const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y);
-    void this.act(
-      moved > 12
-        ? { kind: "dragCoords", ...from, endX: to.x, endY: to.y }
-        : { kind: "clickCoords", ...to },
-    );
+    if (action.kind === "press") {
+      this.queueKeyboard(action);
+    } else {
+      void this.act(action, { touch: touch && !activate, epoch: this.focusEpoch });
+    }
   }
 
   private async releaseSession(session: ControlSession): Promise<HandoffResponse> {
@@ -487,7 +552,23 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
       }
     } catch (error) {
       if (this.isCurrent(connection)) {
+        if (session) {
+          this.stopControl(session);
+        }
         this.error = formatUiError(error);
+        // Completion can durably revoke control before continuation admission fails.
+        // Retire local authority even if the status refresh also fails.
+        this.handoff = null;
+        try {
+          const response = await connection.client.request<HandoffResponse>("browser.handoff.get", {
+            id: connection.id,
+          });
+          if (this.isCurrent(connection)) {
+            this.handoff = response.handoff;
+          }
+        } catch {
+          // The original failure remains visible with the normal retry action.
+        }
       }
     } finally {
       if (this.isCurrent(connection)) {
@@ -538,12 +619,6 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
       this.handoff.state,
     );
     const controlling = this.isController();
-    const browserReady =
-      controlling &&
-      this.streamStatus === "connected" &&
-      Boolean(this.frameUrl) &&
-      !this.inputBusy &&
-      !this.busy;
     return html`
       <main class="page">
         <header>
@@ -558,18 +633,6 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
           controlling
             ? html`
                 <div class="toolbar">
-                  <button
-                    ?disabled=${!browserReady}
-                    @click=${() => void this.act({ kind: "press", key: "PageUp" })}
-                  >
-                    ${t("humanBrowser.scrollUp")}
-                  </button>
-                  <button
-                    ?disabled=${!browserReady}
-                    @click=${() => void this.act({ kind: "press", key: "PageDown" })}
-                  >
-                    ${t("humanBrowser.scrollDown")}
-                  </button>
                   <button
                     aria-label=${t("humanBrowser.zoomOut")}
                     @click=${() => {
@@ -587,10 +650,14 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
                     +
                   </button>
                 </div>
+                <p class="hint">
+                  ${t(this.armedTouch ? "humanBrowser.tapAgainToType" : "humanBrowser.gestureHint")}
+                </p>
                 <div
                   class="viewer"
                   @wheel=${(event: WheelEvent) => {
                     event.preventDefault();
+                    this.clearTouchKeyboard();
                     void this.act({
                       kind: "press",
                       key: event.deltaY >= 0 ? "PageDown" : "PageUp",
@@ -607,43 +674,24 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
                           draggable="false"
                           @pointerdown=${(event: PointerEvent) => this.pointerDown(event)}
                           @pointerup=${(event: PointerEvent) => this.pointerUp(event)}
-                          @pointercancel=${() => {
-                            this.pointerStart = undefined;
-                          }}
+                          @pointermove=${(event: PointerEvent) => this.pointerGesture.move(event)}
+                          @pointercancel=${() => this.cancelPointers()}
                         />`
                       : html`<div class="viewer-empty">${t("humanBrowser.browserLoading")}</div>`
                   }
                 </div>
-                <div class="text-entry">
-                  <input
-                    .value=${this.textDraft}
-                    ?disabled=${!browserReady}
-                    placeholder=${t("humanBrowser.typePlaceholder")}
-                    @input=${(event: InputEvent) => {
-                      if (event.currentTarget instanceof HTMLInputElement) {
-                        this.textDraft = event.currentTarget.value;
-                      }
-                    }}
-                    @keydown=${(event: KeyboardEvent) => {
-                      if (event.key === "Enter" && this.textDraft) {
-                        event.preventDefault();
-                        void this.sendText();
-                      }
-                    }}
-                  />
-                  <button
-                    ?disabled=${!browserReady || !this.textDraft}
-                    @click=${() => void this.sendText()}
-                  >
-                    ${t("humanBrowser.sendText")}
-                  </button>
-                  <button
-                    ?disabled=${!browserReady}
-                    @click=${() => void this.act({ kind: "press", key: "Enter" })}
-                  >
-                    ${t("humanBrowser.pressEnter")}
-                  </button>
-                </div>
+                <textarea
+                  class="canvas-keyboard"
+                  aria-label=${t("humanBrowser.typePlaceholder")}
+                  ?disabled=${!controlling || this.streamStatus !== "connected" || !this.frameUrl || this.busy}
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  @beforeinput=${(event: InputEvent) => this.queueKeyboard(humanBrowserBeforeInput(event))}
+                  @input=${(event: InputEvent) => this.queueKeyboard(humanBrowserTextInput(event))}
+                  @compositionend=${(event: CompositionEvent) => this.queueKeyboard(humanBrowserTextInput(event))}
+                  @keydown=${(event: KeyboardEvent) => this.queueKeyboard(humanBrowserKeyInput(event))}
+                ></textarea>
               `
             : nothing
         }
@@ -657,24 +705,17 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
                         <button
                           class="primary"
                           data-complete
-                          ?disabled=${this.busy || this.inputBusy}
+                          ?disabled=${this.busy || this.inputBusy || this.keyboardPending > 0}
                           @click=${() => void this.finish("browser.handoff.complete")}
                         >
                           ${t("humanBrowser.done")}
-                        </button>
-                        <button
-                          data-leave
-                          ?disabled=${this.busy || this.inputBusy}
-                          @click=${() => void this.leave()}
-                        >
-                          ${t("humanBrowser.leave")}
                         </button>
                       `
                     : nothing
                 }
                 <button
                   class="danger"
-                  ?disabled=${this.busy || this.inputBusy}
+                  ?disabled=${this.busy || this.inputBusy || this.keyboardPending > 0}
                   @click=${() => void this.finish("browser.handoff.cancel")}
                 >
                   ${t("humanBrowser.cancel")}

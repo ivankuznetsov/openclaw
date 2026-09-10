@@ -54,6 +54,9 @@ export class HandoffHttpClient implements HumanInterventionClient {
   }
 
   async activate(): Promise<void> {
+    if (!this.access.token && !this.access.sessionToken) {
+      throw new Error(t("humanBrowser.linkExpired"));
+    }
     if (this.access.storageUnavailable) {
       throw new Error(t("humanBrowser.linkStorageError"));
     }

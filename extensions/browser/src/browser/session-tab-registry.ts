@@ -3,9 +3,9 @@
  * plugin SQLite; all other tabs remain process-local.
  */
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { getOptionalBrowserStateRuntime } from "../browser-runtime-state.js";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import type { BrowserTabOwnership } from "./client.types.js";
-import type { ResolvedBrowserConfig } from "./config.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
 import {
   type CleanupKind,
@@ -14,6 +14,11 @@ import {
   isIgnorableTabCloseError,
   ownsCleanupAttempt,
 } from "./session-tab-cleanup-claim.js";
+import {
+  closeCurrentDurableTab,
+  type DurableCleanupResult,
+  type ResolveBrowserTabCleanupConfig,
+} from "./session-tab-durable-close.js";
 import {
   clearDurableTabAliases,
   clearVolatileTabAliases,
@@ -83,9 +88,6 @@ type DurableTab = BrowserSessionTabRecord & {
 
 type TrackedTab = VolatileTab | DurableTab;
 type DurableOwnership = Extract<BrowserTabOwnership, { status: "durable" }>;
-type DurableCleanupResult =
-  | CloseTrackedCdpTargetResult
-  | { status: "unavailable"; reason: "extension-relay-unavailable" };
 type CloseTab = (tab: {
   targetId: string;
   nativeTargetId?: string;
@@ -99,10 +101,7 @@ type CloseParams = {
     tab: DurableTab,
     options: { shouldClose: () => boolean },
   ) => Promise<CloseTrackedCdpTargetResult>;
-  getResolvedBrowserConfig?: () =>
-    | ResolvedBrowserConfig
-    | null
-    | Promise<ResolvedBrowserConfig | null>;
+  getResolvedBrowserConfig?: ResolveBrowserTabCleanupConfig;
   onWarn?: (message: string) => void;
 };
 
@@ -475,47 +474,6 @@ export function untrackSessionBrowserTab(params: SessionTabParams): void {
   }
 }
 
-async function closeCurrentDurableTab(
-  tab: DurableTab,
-  shouldClose: () => boolean,
-  getResolvedBrowserConfig?: CloseParams["getResolvedBrowserConfig"],
-): Promise<DurableCleanupResult> {
-  // Empty session cleanup must not initialize Browser control or its CDP graph.
-  const [{ getRuntimeConfig }, { resolveCdpControlPolicy }, { closeTrackedCdpTarget }, config] =
-    await Promise.all([
-      import("../config/config.js"),
-      import("./cdp-reachability-policy.js"),
-      import("./cdp.helpers.js"),
-      import("./config.js"),
-    ]);
-  let resolved = await getResolvedBrowserConfig?.();
-  if (!shouldClose()) {
-    return { status: "cancelled" };
-  }
-  if (!resolved) {
-    const cfg = getRuntimeConfig();
-    resolved = config.resolveBrowserConfig(cfg.browser, cfg);
-  }
-  const profile = config.resolveProfile(resolved, tab.profile);
-  if (!profile?.cdpUrl) {
-    return { status: "ownership-mismatch" };
-  }
-  if (profile.driver === "extension" && !resolved.extensionRelayInternalTokens[profile.name]) {
-    return { status: "unavailable", reason: "extension-relay-unavailable" };
-  }
-  const cdpControlPolicy = resolveCdpControlPolicy(profile, resolved.ssrfPolicy);
-  return await closeTrackedCdpTarget({
-    profileName: profile.name,
-    cdpUrl: profile.cdpUrl,
-    nativeTargetId: tab.nativeTargetId,
-    timeoutMs: resolved.remoteCdpTimeoutMs,
-    ssrfPolicy: cdpControlPolicy,
-    expectedProfileFingerprint: tab.profileFingerprint,
-    expectedBrowserInstanceFingerprint: tab.browserInstanceFingerprint,
-    shouldClose,
-  });
-}
-
 async function closeDurableTab(
   candidate: DurableTab,
   params: CloseParams,
@@ -694,10 +652,30 @@ async function closeTrackedTabs(
   let closed = 0;
   const now = params.now ?? Date.now();
   for (const tab of tabs) {
-    closed +=
-      tab.kind === "durable"
-        ? await closeDurableTab(tab, params, now, params.cleanupKind)
-        : await performVolatileCleanup(tab, params, params.cleanupKind);
+    let release: (() => Promise<void>) | undefined;
+    try {
+      if (tab.profile && (tab.kind === "durable" || !isVolatileRoute(tab.route))) {
+        // Cleanup is browser automation too. Hold the same profile reservation
+        // through final CDP dispatch so handoff creation drains an in-flight close.
+        const gate = getOptionalBrowserStateRuntime()?.tabCleanupGate;
+        if (gate) {
+          release = await gate.acquire({
+            target: "host",
+            profile: tab.profile,
+            targetId: tab.kind === "durable" ? tab.nativeTargetId : tab.targetId,
+          });
+          if (!release) {
+            continue;
+          }
+        }
+      }
+      closed +=
+        tab.kind === "durable"
+          ? await closeDurableTab(tab, params, now, params.cleanupKind)
+          : await performVolatileCleanup(tab, params, params.cleanupKind);
+    } finally {
+      await release?.();
+    }
   }
   return closed;
 }

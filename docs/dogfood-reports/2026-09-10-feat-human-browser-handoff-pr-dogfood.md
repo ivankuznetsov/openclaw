@@ -1,98 +1,42 @@
-# Dogfood Report — feat/human-browser-handoff-pr
+# Browser handoff dogfood report
 
-> Browser handoff PR #143015, candidate `c3b4fe1a`, tested on 2026-09-10.
+PR #143015. Validation date: 2026-09-10. Candidate: the task-controls repair in this branch (package verification pending).
 
-## Diff Summary
+## Behavior under test
 
-- Managed browser tasks pause for human intervention and resume in the originating session.
-- Single-use scoped links avoid Gateway administrator login and preserve URL prefixes.
-- Current-turn notification, input authority, tab aliases, mobile coordinates, and pending status are repaired.
+An ordinary owner-authorized direct-chat task encounters a human-only browser step. The agent requests handoff, the Browser plugin sends a complete scoped link and pauses the managed profile, and the human operates the bound tab. **Done — continue agent** revokes human authority and queues continuation in the originating conversation.
 
-## Personas
+The phone viewer uses canvas input: taps, one-finger drag, two-finger scroll, and keyboard insertion at the remote caret. A touch user selects a text field, then taps it again when prompted to open the keyboard. Separate scrolling/text controls and **Leave paused** have been removed. **Cancel handoff** ends the handoff without continuing the task.
 
-- **Remote phone user** — complete a blocked browser step without server access; inferred from this task and VISION.md.
-- **Private Gateway operator** — preserve authorization and recover cleanly; VISION.md security and reliability priorities.
+## Findings and repairs
 
-No Compound Packs are declared.
+- A cross-device attempt showed Gateway sign-in because the agent supplied a bare handoff URL after its request failed with an existing active handoff. No new credential had been issued. The tool now explains this failure and prohibits constructing replacement URLs; missing-credential URLs stay in the handoff viewer with invalid-link guidance.
+- Fresh browser access to the Gateway root required normal authentication. A login saved independently in another browser is separate from scoped handoff credentials; the observation did not demonstrate a scoped credential granting administrator access.
+- Real SQLite lifecycle proof reproduced rejected records containing explicit `undefined` authority fields. Completion, leave, cancellation, and expiry now omit absent fields at the state producer.
+- Periodic tab cleanup now holds the profile automation gate across the asynchronous close. It drains before handoff reservation and preserves an active persisted handoff after runtime-owner recreation.
+- Completion failures retire stale local control and refresh authoritative status, exposing pending continuation admission or a retry action.
+- Canvas typing now inserts instead of replacing a field. Input is serialized, stale authority is fenced, and editable-focus metadata follows the active iframe chain. Touch keyboard activation occurs synchronously on the second tap.
 
-## Flows Tested
+## Automated proof
 
-```mermaid
-flowchart TD
-    A[Ordinary browser task in direct chat] --> B{Human-only blocker?}
-    B -->|No| C[Agent finishes normally]
-    B -->|Yes| D{Owner and managed profile?}
-    D -->|No| E[Explain supported manual action]
-    D -->|Yes| F[Send scoped link then pause]
-    F --> G[Open link on phone]
-    G --> H{Credential valid?}
-    H -->|No| I[Expired or used link error]
-    H -->|Yes| J[Take control of exact remote tab]
-    J --> K[Complete synthetic verification]
-    K --> L[Done revokes control]
-    L --> M{Continuation admitted?}
-    M -->|Pending| N[Refresh status]
-    N --> M
-    M -->|Yes| O[Agent inspects fresh tab and replies in original chat]
-```
+- The final Browser run passed 88 tests across 13 suites, including cleanup/registration/coordinator/maintenance, editable focus, input authority, and real Chromium/SQLite control. Removing the cleanup gate reproduced both reservation/close ordering and persisted-handoff cleanup regressions.
+- The real browser proof covers bound-tab input, forbidden operations, alternate-handoff rejection, caret insertion, iframe input, lease expiry/reclaim, cancellation/expiry, completion revocation, and admission recovery after reopening SQLite.
+- Earlier focused Browser authorization, input normalization, navigation, delivery, and shutdown sibling tests also passed; no full repository suite was run.
+- 32 viewer tests passed. Restoring asynchronous touch focus, suppressing the second remote click, and omitting page-change invalidation reproduced the intended mobile-input regressions; missing-token entry was also reproduced before repair.
+- Browser/UI production and changed-test typechecks passed. Static guards and keyless i18n baseline passed. Targeted Browser/UI lint, styles, formatting, and the final line/import/assertion guards passed. The full package build is pending; no aggregate check pass is claimed.
 
-```mermaid
-flowchart TD
-    A[Active viewer] --> B{User action}
-    B -->|Reload| C[Recover tab-local session]
-    B -->|Leave paused| D[Release controller and retain reservation]
-    D --> E[Reclaim same handoff]
-    B -->|Cancel| F[Revoke link and input without resuming]
-    B -->|Disconnect or expiry| G[Lease expires and task remains paused]
-    C --> H[Another browser cannot reuse redeemed link]
-```
+The Chromium test uses a real browser, dispatcher, HTTP/coordinator boundary, and SQLite plugin-state store. Its scheduler admission callback is a test double. Closing and reopening SQLite runtime owners does not prove a full Gateway process restart or actual chat continuation. Mocked screencast UI captures demonstrate presentation and coordinates, not backend screencast authority.
 
-## Test Matrix & Results
+## Installation and visual proof
 
-| #   | Flow      | Journey / Scenario                                                            | Status                       | Issue                                                                                      | Fix | Commit   |
-| --- | --------- | ----------------------------------------------------------------------------- | ---------------------------- | ------------------------------------------------------------------------------------------ | --- | -------- |
-| 1   | Entry     | Candidate installation, valid config, healthy Gateway and Telegram            | Pass                         | Managed update succeeded; 10,407 payload files match, install marker consumed normally     | -   | c3b4fe1a |
-| 2   | Automatic | Ordinary task triggers link and pause without requesting handoff              | Blocked (needs human verify) | Requires an incoming owner Telegram message; CLI does not carry sender authority           | -   | c3b4fe1a |
-| 3   | Viewer    | Fresh phone-size scoped entry opens without Gateway credentials               | Pass                         | Real installed Gateway, fresh browser session, 390px and 1280px; no Gateway login          | -   | c3b4fe1a |
-| 4   | Input     | Exact remote tab, accurate tap, text input, scrolling and accessible controls | Blocked (needs human verify) | Awaiting a real owner-initiated handoff; Android additionally requires the physical device | -   | c3b4fe1a |
-| 5   | Resume    | Done revokes input and original task continues from fresh page state          | Blocked (needs human verify) | Awaiting a real owner-initiated handoff; Android additionally requires the physical device | -   | c3b4fe1a |
-| 6   | Reentry   | Reload and leave/reclaim preserve only the authorized handoff                 | Blocked (needs human verify) | Awaiting a real owner-initiated handoff; Android additionally requires the physical device | -   | c3b4fe1a |
-| 7   | Rejection | Invalid credential rejects with an actionable error                           | Pass                         | HTTP 403 and expired/used-link guidance, no console errors                                 | -   | c3b4fe1a |
-| 9   | Rejection | Redeemed-link reuse, cancellation, and live input revocation                  | Blocked (needs human verify) | Requires a real owner-initiated handoff; automated boundary coverage already passed        | -   | c3b4fe1a |
-| 8   | Android   | Actual Android/Tailscale link opening and completion                          | Blocked (needs human verify) | Awaiting a real owner-initiated handoff; Android additionally requires the physical device | -   | c3b4fe1a |
+A fresh native state archive passed verification. The previous candidate package and service configuration are retained. The managed Gateway is stopped for installation maintenance. Its existing shutdown hit the internal watchdog after a 315-second drain with three active tasks and a plugin-disposal timeout; it exited with code 1. This is recorded as incomplete shutdown cleanup, not a clean stop. Candidate installation, screenshots, and post-update health are pending.
 
-## Pack Compliance
+## Remaining verification
 
-None.
+The operator has sent real incoming Telegram tasks and will record the actual Android flow. Valid cross-device redemption, native soft-keyboard behavior, human completion, and continuation in the same chat remain pending that video. Desktop emulation and the backend integration are not physical Android proof.
 
-## What Was Fixed
+Telegram Test Server E2E could not run because the required Convex CLI and broker credentials are unavailable. No credentials or sender authority were invented. Full live Gateway restart recovery and real screencast revocation remain distinct proof gaps.
 
-No additional code fixes during this run. Candidate contains the previously verified review repairs.
+An unused link is a bearer capability that can be redeemed by its first recipient. Browser/runtime and security-owner review must decide whether that satisfies the parent issue's original-owner authentication expectation. The link grants access to a bound tab, not just one website; in-page navigation remains possible. Dependency-guard approval is also outstanding.
 
-## Paper Cuts (by persona)
-
-No new paper cuts in the entry/error paths. Successful control and completion still require live verification.
-
-## Console Errors
-
-No page or console errors in the tested entry/error paths. During the managed restart, the scoped endpoint returned expected HTTP 503 and the viewer showed a retry message. After update completion, invalid credentials returned HTTP 403 and the specific expired/used-link message.
-
-## Human Verifications
-
-Incoming owner Telegram task and actual Android interaction are pending. The operator was asked to send an ordinary browser task against the harmless local verification fixture, without mentioning handoff. Read-only history inspection found no matching task yet. Automated desktop emulation is not Android proof.
-
-## Decisions for a Human
-
-No product decision required. The real external turn must come from the owner; do not manufacture sender or restart-recovery authority.
-
-## Learnings
-
-Gateway health may pass briefly before the updater performs its final restart. Wait for the updater to report success and recheck both health and request admission. This run encountered two normal shutdown-drain deadlines with three pre-existing active tasks; no forced stop or unrelated task mutation was performed.
-
-### Pack candidates
-
-None.
-
-## Final Status
-
-Installed and ready for the interactive dogfood task, but not end-to-end verified and not declared merge-ready. All remaining scenarios require the external owner turn or physical Android verification; they were not silently passed. Candidate proof reused because no source code changed: focused browser/UI regressions, production and changed-test typechecks, targeted lint, full build, package integrity, and mocked browser smoke passed. The broad repository changed check was deliberately stopped during unrelated core-test typechecking and is not a complete pass. The repository-required proportional test scope was used; no whole-repository suite pass is claimed. The dogfood run used the agent-browser CLI against the installed Gateway. The verified state archive and previous package/service were retained for rollback.
+The PR is not declared merge-ready. No full repository suite or aggregate changed-check pass is claimed.

@@ -22,6 +22,7 @@ import {
   quarantineBlockedNavigationTarget,
   wasBrowserNavigationSourcePreservedAfterPolicyDenial,
 } from "./pw-session.js";
+import { readHumanBrowserInputFocus } from "./pw-tools-core.input-focus.js";
 import {
   clickCoordsViaPlaywright,
   clickViaPlaywright,
@@ -116,6 +117,7 @@ async function executeSingleAction(
         text: action.text,
         submit: action.submit,
         slowly: action.slowly,
+        insertText: action.insertText,
         timeoutMs: action.timeoutMs,
         ...navigationPolicy,
         signal,
@@ -294,9 +296,11 @@ export async function executeActViaPlaywright(
   opts: GuardedInteractionOptions & {
     action: BrowserActRequest;
     evaluateEnabled?: boolean;
+    includeInputFocus?: boolean;
   },
 ): Promise<{
   result?: unknown;
+  focusedEditable?: boolean;
   results?: BrowserBatchActionResult[];
   aborted?: BrowserBatchAbort;
   blockedByDialog?: boolean;
@@ -377,7 +381,14 @@ export async function executeActViaPlaywright(
         ...(newDownloads ? { downloads: newDownloads } : {}),
       });
     }
-    return await withOperationTarget(newDownloads ? { downloads: newDownloads } : {});
+    const focusedEditable =
+      opts.includeInputFocus && opts.action.kind === "clickCoords"
+        ? await readHumanBrowserInputFocus(page, opts)
+        : undefined;
+    return await withOperationTarget({
+      ...(newDownloads ? { downloads: newDownloads } : {}),
+      ...(focusedEditable === undefined ? {} : { focusedEditable }),
+    });
   } catch (err) {
     let failure = err;
     try {

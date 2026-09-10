@@ -334,7 +334,6 @@ function createLazyBrowserPluginService(): OpenClawPluginService {
 
 /** Register Browser tool factories, CLI, gateway methods, services, and audits. */
 export function registerBrowserPlugin(api: OpenClawPluginApi) {
-  initializeBrowserSessionTabStore(api.runtime);
   configureSystemProfileImportStateStore(
     api.runtime.state.openKeyedStore<SystemProfileImportState>({
       namespace: "browser.system-profile-import",
@@ -355,6 +354,9 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
     scheduleContinuation: api.session.workflow.scheduleSessionTurn,
     onRetryError: (error) =>
       api.logger.warn(`browser handoff continuation retry failed: ${String(error)}`),
+  });
+  initializeBrowserSessionTabStore(api.runtime, {
+    acquire: (browser) => humanInterventionCoordinator.beginTabCleanup(browser),
   });
   api.registerTool(((ctx: OpenClawPluginToolContext) => {
     const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;

@@ -3,10 +3,9 @@ import type { HumanInterventionResponse, HumanInterventionState } from "@opencla
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import {
-  resolveHumanBrowserPoint,
-  type OpenClawHumanInterventionPanel,
-} from "./human-intervention-panel.ts";
+import { resolveHumanBrowserPoint } from "./human-intervention-input.ts";
+import type { OpenClawHumanInterventionPanel } from "./human-intervention-panel.ts";
+import "./human-intervention-panel.ts";
 
 class TestSocket extends EventTarget {
   binaryType = "";
@@ -53,7 +52,10 @@ function createClient() {
   const request = vi.fn(
     async (
       method: string,
-    ): Promise<HumanInterventionResponse | { wsPath: string } | { ok: true }> => {
+      _params?: unknown,
+    ): Promise<
+      HumanInterventionResponse | { wsPath: string } | { ok: true; focusedEditable?: boolean }
+    > => {
       if (method === "browser.handoff.get") {
         return handoff();
       }
@@ -85,6 +87,43 @@ async function mountPanel(client: GatewayBrowserClient) {
   document.body.append(panel);
   await waitForFast(() => expect(panel.shadowRoot?.textContent).toContain("accounts.example"));
   return panel;
+}
+
+async function mountReadyPanel() {
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = vi.fn(() => "blob:frame");
+      static override revokeObjectURL = vi.fn();
+    },
+  );
+  const { sockets } = stubWebSockets();
+  const { client, request } = createClient();
+  const panel = await mountPanel(client);
+  panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-take-control]")?.click();
+  await waitForFast(() => expect(sockets).toHaveLength(1));
+  sockets[0]?.dispatchEvent(
+    new MessageEvent("message", {
+      data: JSON.stringify({
+        type: "ready",
+        targetId: "tab-1",
+        url: "https://accounts.example/challenge",
+        title: "Challenge",
+      }),
+    }),
+  );
+  sockets[0]?.dispatchEvent(
+    new MessageEvent("message", {
+      data: screencastFrame("https://accounts.example/challenge"),
+    }),
+  );
+  await waitForFast(() =>
+    expect(panel.shadowRoot?.querySelector<HTMLTextAreaElement>(".canvas-keyboard")?.disabled).toBe(
+      false,
+    ),
+  );
+
+  return { panel, request, sockets };
 }
 
 afterEach(() => {
@@ -252,7 +291,7 @@ describe("human browser intervention panel", () => {
       }),
     );
     expect(sockets).toHaveLength(1);
-    expect(panel.shadowRoot?.querySelector<HTMLInputElement>(".text-entry input")?.disabled).toBe(
+    expect(panel.shadowRoot?.querySelector<HTMLTextAreaElement>(".canvas-keyboard")?.disabled).toBe(
       true,
     );
 
@@ -267,14 +306,14 @@ describe("human browser intervention panel", () => {
     await waitForFast(() => expect(panel.shadowRoot?.textContent).toContain("return to your chat"));
   });
 
-  it("leaves control without resuming the paused agent", async () => {
+  it("releases control when the viewer closes without resuming the paused agent", async () => {
     stubWebSockets();
     const { client, request } = createClient();
     const panel = await mountPanel(client);
     panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-take-control]")?.click();
     await waitForFast(() => expect(panel.shadowRoot?.textContent).toContain("You have control"));
 
-    panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-leave]")?.click();
+    panel.remove();
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith("browser.handoff.leave", {
         id: "handoff-1",
@@ -318,39 +357,293 @@ describe("human browser intervention panel", () => {
     );
   });
 
-  it("keeps completion disabled until remote input finishes", async () => {
-    vi.stubGlobal(
-      "URL",
-      class extends URL {
-        static override createObjectURL = vi.fn(() => "blob:frame");
-        static override revokeObjectURL = vi.fn();
-      },
+  it("forwards incremental text, composed text, deletion and modified keys in order", async () => {
+    const { panel, request } = await mountReadyPanel();
+    request.mockClear();
+    const input = panel.shadowRoot!.querySelector<HTMLTextAreaElement>(".canvas-keyboard")!;
+    for (const text of ["a", "b"]) {
+      input.value = text;
+      input.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: text }));
+    }
+    input.value = "文";
+    input.dispatchEvent(new InputEvent("input", { isComposing: true }));
+    input.dispatchEvent(new CompositionEvent("compositionend", { data: "文" }));
+    input.dispatchEvent(new InputEvent("input", { inputType: "insertCompositionText" }));
+    input.dispatchEvent(
+      new InputEvent("beforeinput", { inputType: "deleteContentBackward", cancelable: true }),
     );
-    const { sockets } = stubWebSockets();
-    const { client, request } = createClient();
-    const panel = await mountPanel(client);
-    panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-take-control]")?.click();
-    await waitForFast(() => expect(sockets).toHaveLength(1));
-    sockets[0]?.dispatchEvent(
-      new MessageEvent("message", {
-        data: JSON.stringify({
-          type: "ready",
-          targetId: "tab-1",
-          url: "https://accounts.example/challenge",
-          title: "Challenge",
-        }),
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "a", ctrlKey: true, cancelable: true }),
+    );
+    input.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowLeft",
+        ctrlKey: true,
+        shiftKey: true,
+        cancelable: true,
       }),
     );
-    sockets[0]?.dispatchEvent(
-      new MessageEvent("message", {
-        data: screencastFrame("https://accounts.example/challenge"),
-      }),
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(6));
+    expect(request.mock.calls.map((call) => call[1])).toEqual(
+      [
+        { kind: "insertText", text: "a" },
+        { kind: "insertText", text: "b" },
+        { kind: "insertText", text: "文" },
+        { kind: "press", key: "Backspace" },
+        { kind: "press", key: "Control+a" },
+        { kind: "press", key: "Control+Shift+ArrowLeft" },
+      ].map((action) => expect.objectContaining({ action, operation: "act" })),
     );
+  });
+
+  it("discards queued keyboard input after the first failed chunk", async () => {
+    const { panel, request } = await mountReadyPanel();
+    request.mockClear();
+    request.mockRejectedValueOnce(new Error("input failed"));
+    const input = panel.shadowRoot!.querySelector<HTMLTextAreaElement>(".canvas-keyboard")!;
+    for (const text of ["a", "b", "c"]) {
+      input.value = text;
+      input.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: text }));
+    }
     await waitForFast(() =>
-      expect(panel.shadowRoot?.querySelector<HTMLInputElement>(".text-entry input")?.disabled).toBe(
+      expect(panel.shadowRoot!.querySelector("[data-take-control]")).not.toBeNull(),
+    );
+    expect(
+      request.mock.calls.filter(([method]) => method === "browser.handoff.browser"),
+    ).toHaveLength(1);
+    expect(panel.shadowRoot!.textContent).toContain("input failed");
+  });
+
+  it("retires control and shows pending continuation after ambiguous completion failure", async () => {
+    const { panel, request } = await mountReadyPanel();
+    request.mockRejectedValueOnce(new Error("scheduler admission failed"));
+    request.mockResolvedValueOnce(handoff("resume_pending", 3));
+    panel.shadowRoot!.querySelector<HTMLButtonElement>("[data-complete]")!.click();
+    await waitForFast(() =>
+      expect(panel.shadowRoot!.querySelector("[data-refresh-status]")).not.toBeNull(),
+    );
+    expect(panel.shadowRoot!.querySelector(".frame")).toBeNull();
+    expect(panel.shadowRoot!.querySelector("[data-complete]")).toBeNull();
+    expect(panel.shadowRoot!.textContent).toContain("scheduler admission failed");
+  });
+
+  it("opens the canvas keyboard only after the remote tab reports editable focus", async () => {
+    const { panel, request } = await mountReadyPanel();
+    const keyboard = panel.shadowRoot!.querySelector<HTMLTextAreaElement>(".canvas-keyboard")!;
+    const frame = panel.shadowRoot!.querySelector<HTMLImageElement>(".frame")!;
+    const tap = () => {
+      for (const type of ["pointerdown", "pointerup"]) {
+        const event = new MouseEvent(type, { clientX: 20, clientY: 20 });
+        Object.defineProperty(event, "pointerId", { value: 1 });
+        frame.dispatchEvent(event);
+      }
+    };
+    request.mockResolvedValueOnce({ ok: true, focusedEditable: true });
+    tap();
+    expect(panel.shadowRoot!.activeElement).not.toBe(keyboard);
+    await waitForFast(() => expect(panel.shadowRoot!.activeElement).toBe(keyboard));
+    await panel.updateComplete;
+    request.mockResolvedValueOnce({ ok: true, focusedEditable: false });
+    tap();
+    await waitForFast(() => expect(panel.shadowRoot!.activeElement).not.toBe(keyboard));
+  });
+
+  it("requires a second touch on the selected field to synchronously open the keyboard", async () => {
+    const { panel, request } = await mountReadyPanel();
+    request.mockClear();
+    const keyboard = panel.shadowRoot!.querySelector<HTMLTextAreaElement>(".canvas-keyboard")!;
+    const frame = panel.shadowRoot!.querySelector<HTMLImageElement>(".frame")!;
+    vi.spyOn(frame, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 800));
+    const tap = (x: number) => {
+      for (const type of ["pointerdown", "pointerup"]) {
+        const event = new MouseEvent(type, { clientX: x, clientY: 20 });
+        Object.defineProperties(event, {
+          pointerId: { value: 1 },
+          pointerType: { value: "touch" },
+        });
+        frame.dispatchEvent(event);
+      }
+    };
+    request.mockResolvedValueOnce({ ok: true, focusedEditable: true });
+    tap(20);
+    await waitForFast(() => {
+      expect(panel.shadowRoot!.textContent).toContain("Tap the field again to type");
+      expect(panel.shadowRoot!.querySelector<HTMLButtonElement>("[data-complete]")!.disabled).toBe(
+        false,
+      );
+    });
+    expect(panel.shadowRoot!.activeElement).not.toBe(keyboard);
+    request.mockResolvedValueOnce({ ok: true, focusedEditable: true });
+    tap(20);
+    // Deliberately synchronous: awaiting here would miss the mobile activation regression.
+    expect(panel.shadowRoot!.activeElement).toBe(keyboard);
+    expect(request).toHaveBeenCalledTimes(2);
+    await waitForFast(() =>
+      expect(panel.shadowRoot!.querySelector<HTMLButtonElement>("[data-complete]")!.disabled).toBe(
         false,
       ),
     );
+    await panel.updateComplete;
+    expect(panel.shadowRoot!.textContent).not.toContain("Tap the field again to type");
+    keyboard.blur();
+    request.mockResolvedValueOnce({ ok: true, focusedEditable: true });
+    tap(20);
+    await waitForFast(() => {
+      expect(panel.shadowRoot!.textContent).toContain("Tap the field again to type");
+      expect(panel.shadowRoot!.querySelector<HTMLButtonElement>("[data-complete]")!.disabled).toBe(
+        false,
+      );
+    });
+    request.mockResolvedValueOnce({ ok: true, focusedEditable: false });
+    tap(200);
+    expect(panel.shadowRoot!.activeElement).not.toBe(keyboard);
+    await waitForFast(() =>
+      expect(panel.shadowRoot!.textContent).not.toContain("Tap the field again to type"),
+    );
+    expect(request).toHaveBeenCalledTimes(4);
+  });
+
+  it.each(["editable", "noneditable", "failed"] as const)(
+    "fences keyboard input behind the second tap when retargeting is %s",
+    async (outcome) => {
+      const { panel, request } = await mountReadyPanel();
+      request.mockClear();
+      const keyboard = panel.shadowRoot!.querySelector<HTMLTextAreaElement>(".canvas-keyboard")!;
+      const frame = panel.shadowRoot!.querySelector<HTMLImageElement>(".frame")!;
+      const tap = () => {
+        for (const type of ["pointerdown", "pointerup"]) {
+          const event = new MouseEvent(type, { clientX: 20, clientY: 20 });
+          Object.defineProperties(event, {
+            pointerId: { value: 1 },
+            pointerType: { value: "touch" },
+          });
+          frame.dispatchEvent(event);
+        }
+      };
+      request.mockResolvedValueOnce({ ok: true, focusedEditable: true });
+      tap();
+      await waitForFast(() => {
+        expect(panel.shadowRoot!.textContent).toContain("Tap the field again to type");
+        expect(
+          panel.shadowRoot!.querySelector<HTMLButtonElement>("[data-complete]")!.disabled,
+        ).toBe(false);
+      });
+      let finishClick!: () => void;
+      request.mockImplementationOnce(
+        () =>
+          new Promise((resolve, reject) => {
+            finishClick = () =>
+              outcome === "failed"
+                ? reject(new Error("retarget failed"))
+                : resolve({ ok: true, focusedEditable: outcome === "editable" });
+          }),
+      );
+      tap();
+      expect(panel.shadowRoot!.activeElement).toBe(keyboard);
+      expect(request).toHaveBeenCalledTimes(2);
+      keyboard.value = "secret";
+      keyboard.dispatchEvent(new InputEvent("input", { inputType: "insertText", data: "secret" }));
+      await panel.updateComplete;
+      expect(request).toHaveBeenCalledTimes(2);
+      finishClick();
+      await waitForFast(() =>
+        expect(
+          panel.shadowRoot!.querySelector<HTMLButtonElement>("[data-complete]")!.disabled,
+        ).toBe(false),
+      );
+      const inserts = request.mock.calls.filter(
+        (call) => (call[1] as { action?: { kind?: string } })?.action?.kind === "insertText",
+      );
+      expect(inserts).toHaveLength(outcome === "editable" ? 1 : 0);
+      if (outcome !== "editable") {
+        expect(panel.shadowRoot!.activeElement).not.toBe(keyboard);
+      }
+    },
+  );
+
+  it("clears the armed touch when a screencast frame changes URL without a metadata event", async () => {
+    const { panel, request, sockets } = await mountReadyPanel();
+    const frame = panel.shadowRoot!.querySelector<HTMLImageElement>(".frame")!;
+    request.mockResolvedValueOnce({ ok: true, focusedEditable: true });
+    for (const type of ["pointerdown", "pointerup"]) {
+      const event = new MouseEvent(type, { clientX: 20, clientY: 20 });
+      Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: "touch" } });
+      frame.dispatchEvent(event);
+    }
+    await waitForFast(() =>
+      expect(panel.shadowRoot!.textContent).toContain("Tap the field again to type"),
+    );
+    sockets[0]!.dispatchEvent(
+      new MessageEvent("message", { data: screencastFrame("https://accounts.example/next") }),
+    );
+    await waitForFast(() =>
+      expect(panel.shadowRoot!.textContent).not.toContain("Tap the field again to type"),
+    );
+  });
+
+  it("does not arm a delayed touch response after another touch invalidates its target", async () => {
+    const { panel, request } = await mountReadyPanel();
+    const keyboard = panel.shadowRoot!.querySelector<HTMLTextAreaElement>(".canvas-keyboard")!;
+    const frame = panel.shadowRoot!.querySelector<HTMLImageElement>(".frame")!;
+    let resolveInput!: (value: { ok: true; focusedEditable: boolean }) => void;
+    request.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveInput = resolve;
+        }),
+    );
+    const tap = (x: number) => {
+      for (const type of ["pointerdown", "pointerup"]) {
+        const event = new MouseEvent(type, { clientX: x, clientY: 20 });
+        Object.defineProperties(event, {
+          pointerId: { value: 1 },
+          pointerType: { value: "touch" },
+        });
+        frame.dispatchEvent(event);
+      }
+    };
+    tap(20);
+    tap(200);
+    resolveInput({ ok: true, focusedEditable: true });
+    await waitForFast(() =>
+      expect(panel.shadowRoot!.querySelector<HTMLButtonElement>("[data-complete]")!.disabled).toBe(
+        false,
+      ),
+    );
+    expect(panel.shadowRoot!.activeElement).not.toBe(keyboard);
+    expect(panel.shadowRoot!.textContent).not.toContain("Tap the field again to type");
+  });
+
+  it("uses a two-finger swipe for scroll without sending a leftover click or drag", async () => {
+    const { panel, request } = await mountReadyPanel();
+    request.mockClear();
+    const frame = panel.shadowRoot!.querySelector<HTMLImageElement>(".frame")!;
+    const pointer = (type: string, pointerId: number, clientY: number) => {
+      const event = new MouseEvent(type, { clientX: 20, clientY });
+      Object.defineProperties(event, {
+        pointerId: { value: pointerId },
+        pointerType: { value: "touch" },
+      });
+      frame.dispatchEvent(event);
+    };
+    pointer("pointerdown", 1, 100);
+    pointer("pointerdown", 2, 100);
+    pointer("pointermove", 1, 30);
+    pointer("pointermove", 2, 30);
+    pointer("pointerup", 1, 30);
+    pointer("pointerup", 2, 30);
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
+    expect(request).toHaveBeenCalledWith(
+      "browser.handoff.browser",
+      expect.objectContaining({ action: { kind: "press", key: "PageDown" } }),
+    );
+    expect(panel.shadowRoot!.activeElement).not.toBe(
+      panel.shadowRoot!.querySelector(".canvas-keyboard"),
+    );
+  });
+
+  it("keeps completion disabled until remote input finishes", async () => {
+    const { panel, request } = await mountReadyPanel();
 
     let releaseInput: (() => void) | undefined;
     request.mockImplementation(async (method: string) => {
@@ -366,10 +659,9 @@ describe("human browser intervention panel", () => {
       return handoff("control", 2);
     });
 
-    const scrollDown = [
-      ...(panel.shadowRoot?.querySelectorAll<HTMLButtonElement>(".toolbar button") ?? []),
-    ].find((button) => button.textContent?.includes("Scroll down"));
-    scrollDown?.click();
+    panel.shadowRoot
+      ?.querySelector(".viewer")
+      ?.dispatchEvent(new WheelEvent("wheel", { deltaY: 100 }));
     await waitForFast(() =>
       expect(panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-complete]")?.disabled).toBe(
         true,

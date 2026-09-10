@@ -105,7 +105,7 @@ A separate WhatsApp number is recommended (setup and metadata are optimized for 
 
 ### Human browser handoff
 
-An owner-authorized WhatsApp DM can receive a readable HTTPS **Open browser** link when an agent pauses a managed browser tab for live human verification. The shared mobile viewer requires normal Gateway authentication and returns the continuation to the same WhatsApp route. See [Human browser intervention](/tools/browser-human-intervention).
+WhatsApp does not currently support automatic browser handoff links. Handoff requires a current-turn delivery capability, which WhatsApp's Gateway-owned delivery does not expose. See [Human browser intervention](/tools/browser-human-intervention).
 
 <AccordionGroup>
   <Accordion title="Dedicated number (recommended)">
