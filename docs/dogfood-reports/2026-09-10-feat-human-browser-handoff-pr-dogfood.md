@@ -1,6 +1,6 @@
 # Browser handoff dogfood report
 
-PR #143015. Validation date: 2026-09-10. Candidate: the task-controls repair in this branch (package verification pending).
+PR #143015. Validation date: 2026-09-10. Installed code candidate: `084f204b4a5279e3a5a7e948a48bf7150865a1c2`.
 
 ## Behavior under test
 
@@ -23,13 +23,23 @@ The phone viewer uses canvas input: taps, one-finger drag, two-finger scroll, an
 - The real browser proof covers bound-tab input, forbidden operations, alternate-handoff rejection, caret insertion, iframe input, lease expiry/reclaim, cancellation/expiry, completion revocation, and admission recovery after reopening SQLite.
 - Earlier focused Browser authorization, input normalization, navigation, delivery, and shutdown sibling tests also passed; no full repository suite was run.
 - 32 viewer tests passed. Restoring asynchronous touch focus, suppressing the second remote click, and omitting page-change invalidation reproduced the intended mobile-input regressions; missing-token entry was also reproduced before repair.
-- Browser/UI production and changed-test typechecks passed. Static guards and keyless i18n baseline passed. Targeted Browser/UI lint, styles, formatting, and the final line/import/assertion guards passed. The full package build is pending; no aggregate check pass is claimed.
+- Browser/UI production and changed-test typechecks passed. Static guards and keyless i18n baseline passed. Targeted Browser/UI lint, styles, formatting, and the final line/import/assertion guards passed. The full native package build and tarball integrity/import-graph checks passed; no aggregate check pass is claimed.
 
 The Chromium test uses a real browser, dispatcher, HTTP/coordinator boundary, and SQLite plugin-state store. Its scheduler admission callback is a test double. Closing and reopening SQLite runtime owners does not prove a full Gateway process restart or actual chat continuation. Mocked screencast UI captures demonstrate presentation and coordinates, not backend screencast authority.
 
 ## Installation and visual proof
 
-A fresh native state archive passed verification. The previous candidate package and service configuration are retained. The managed Gateway is stopped for installation maintenance. Its existing shutdown hit the internal watchdog after a 315-second drain with three active tasks and a plugin-disposal timeout; it exited with code 1. This is recorded as incomplete shutdown cleanup, not a clean stop. Candidate installation, screenshots, and post-update health are pending.
+A fresh native state archive passed verification. The previous candidate package and service configuration are retained. During maintenance, the existing Gateway shutdown hit its internal watchdog after a 315-second drain with three active tasks and a plugin-disposal timeout; it exited with code 1. This was incomplete shutdown cleanup, not a clean stop.
+
+The native updater staged the tarball but returned `skipped / already-current` because both builds retain package version `2026.9.3`. The exact tarball was then installed through the existing npm prefix, followed by successful `openclaw doctor --fix --non-interactive` and service start. No version or update-channel change was made. Native updater candidate rehearsal was not completed; this installation used the documented manual package/Doctor path.
+
+Package SHA256: `9f53d4820d9db6ddeb647aae682411fcef757430a298d5648200b93accadb90f`. All 10,410 archive payload entries were checked against the installation with no mismatches; only the expected consumed lifecycle marker was absent. Installed build ID: `2026.9.3-084f204b4a52-2026-09-10T22-35-03.240Z`.
+
+The Gateway returned healthy after startup, and Telegram reported configured and running. The served UI build ID and entry script matched the installed candidate. Server-side base-path and asset-URL rewriting explains the expected HTML byte differences.
+
+Built-viewer smoke tests passed at 390px and 1280px widths, both at the root and a custom base path. They verified explicit redemption, cleared URL fragments, no Gateway login, removed controls, tap coordinates, reachable cancellation, and completion. Before/after screenshots were inspected. These flows use mocked scoped HTTP and screencast data.
+
+A separate fresh browser session against the installed live Gateway confirmed that a credential-free focus URL stays in the handoff viewer and shows invalid-link guidance on activation. Navigating to the Gateway root still requires its ordinary token. No Gateway credential was entered during this check.
 
 ## Remaining verification
 
