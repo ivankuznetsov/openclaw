@@ -43,6 +43,14 @@ export type BrowserActRequest =
       targetId?: string;
     }
   | {
+      kind: "scrollCoords";
+      x: number;
+      y: number;
+      deltaX: number;
+      deltaY: number;
+      targetId?: string;
+    }
+  | {
       kind: "type";
       ref?: string;
       selector?: string;

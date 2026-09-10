@@ -100,6 +100,20 @@ export async function clickCoordsViaPlaywright(
   });
 }
 
+export async function scrollCoordsViaPlaywright(
+  opts: GuardedInteractionOptions & { x: number; y: number; deltaX: number; deltaY: number },
+): Promise<void> {
+  const page = await getRestoredPageForTarget(opts);
+  await runGuardedPageInteraction(page, opts, async () => {
+    throwIfInteractionAborted(opts.signal);
+    opts.assertCurrent?.();
+    await page.mouse.move(opts.x, opts.y);
+    throwIfInteractionAborted(opts.signal);
+    opts.assertCurrent?.();
+    await page.mouse.wheel(opts.deltaX, opts.deltaY);
+  });
+}
+
 export async function dragCoordsViaPlaywright(
   opts: GuardedInteractionOptions & {
     x: number;

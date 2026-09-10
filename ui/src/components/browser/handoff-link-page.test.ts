@@ -22,6 +22,7 @@ afterEach(() => {
   sessionStorage.clear();
   history.replaceState(null, "", "/");
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 function openLink() {
@@ -53,15 +54,13 @@ describe("scoped handoff links", () => {
     vi.stubGlobal("fetch", fetchMock);
     mountHandoffLinkPage(document.body, access!);
     const page = document.body.firstElementChild!;
-    await waitForFast(() => expect(page.shadowRoot?.querySelector("button")).not.toBeNull());
-    page.shadowRoot!.querySelector("button")!.click();
     await waitForFast(() =>
       expect(page.shadowRoot?.querySelector('[role="alert"]')).not.toBeNull(),
     );
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("removes the capability from history, survives reload, and redeems only after Take control", async () => {
+  it("removes the capability from history and opens the scoped browser without a confirmation screen", async () => {
     const fetchMock = mockEndpoint();
     vi.stubGlobal("fetch", fetchMock);
     vi.stubGlobal(
@@ -75,10 +74,7 @@ describe("scoped handoff links", () => {
     expect(captureHandoffAccess()?.token).toBe(token);
     mountHandoffLinkPage(document.body, access);
     const page = document.body.firstElementChild!;
-    await waitForFast(() => expect(page.shadowRoot?.querySelector("button")).not.toBeNull());
-    expect(fetchMock).not.toHaveBeenCalled();
     expect(page.shadowRoot?.textContent).not.toContain("Gateway secret");
-    page.shadowRoot!.querySelector("button")!.click();
     await waitForFast(() =>
       expect(
         fetchMock.mock.calls.some(([, init]) => JSON.parse(init.body as string).action === "claim"),
@@ -98,6 +94,34 @@ describe("scoped handoff links", () => {
     });
     expect(captureHandoffAccess()?.sessionToken).toBe(body.sessionToken);
     expect(init.credentials).toBe("omit");
+  });
+
+  it("waits for a hidden document to become visible before consuming its credential", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const fetchMock = mockEndpoint();
+    vi.stubGlobal("fetch", fetchMock);
+    vi.stubGlobal(
+      "WebSocket",
+      class extends EventTarget {
+        close() {}
+      },
+    );
+    mountHandoffLinkPage(document.body, openLink());
+    const page = document.body.firstElementChild!;
+    await waitForFast(() =>
+      expect(page.shadowRoot?.querySelector('[role="status"]')).not.toBeNull(),
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+    visibility.mockReturnValue("visible");
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalled());
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body as string).action).toBe("redeem");
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(
+      fetchMock.mock.calls.filter(
+        ([, init]) => JSON.parse(init.body as string).action === "redeem",
+      ),
+    ).toHaveLength(1);
   });
 
   it("retains the generated session before redemption and recovers a lost response without consuming the link again", async () => {
@@ -163,8 +187,6 @@ describe("scoped handoff links", () => {
     );
     mountHandoffLinkPage(document.body, openLink());
     const page = document.body.firstElementChild!;
-    await waitForFast(() => expect(page.shadowRoot?.querySelector("button")).not.toBeNull());
-    page.shadowRoot!.querySelector("button")!.click();
     await waitForFast(() =>
       expect(page.shadowRoot?.textContent).toContain("Ask your agent for a new handoff link"),
     );

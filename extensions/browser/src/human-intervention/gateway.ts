@@ -10,6 +10,7 @@ import {
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { browserControlAuthoritySignal } from "../browser/control-authority.js";
+import { normalizeActRequest } from "../browser/routes/agent.act.normalize.js";
 import type { HumanInterventionCoordinator } from "./coordinator.js";
 import type { HumanInterventionRecord } from "./service.js";
 
@@ -75,6 +76,9 @@ export function sanitizeAction(value: unknown, targetId: string): Record<string,
     throw new Error("action is required");
   }
   const kind = action.kind;
+  if (kind === "scroll") {
+    return normalizeActRequest({ ...action, kind: "scrollCoords", targetId });
+  }
   if (kind === "clickCoords") {
     return {
       kind,
@@ -113,7 +117,7 @@ export function sanitizeAction(value: unknown, targetId: string): Record<string,
     };
   }
   throw new Error(
-    "human browser input supports only clickCoords, dragCoords, press, insertText, and type",
+    "human browser input supports only clickCoords, dragCoords, scroll, press, insertText, and type",
   );
 }
 

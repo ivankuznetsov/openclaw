@@ -225,6 +225,30 @@ export function normalizeActRequest(
         ...(targetId ? { targetId } : {}),
       };
     }
+    case "scrollCoords": {
+      const x = readRouteFiniteNumber(body.x, "x");
+      const y = readRouteFiniteNumber(body.y, "y");
+      const deltaX = readRouteFiniteNumber(body.deltaX, "deltaX");
+      const deltaY = readRouteFiniteNumber(body.deltaY, "deltaY");
+      if (
+        x === undefined ||
+        y === undefined ||
+        deltaX === undefined ||
+        deltaY === undefined ||
+        x < 0 ||
+        y < 0 ||
+        x > ACT_MAX_VIEWPORT_DIMENSION ||
+        y > ACT_MAX_VIEWPORT_DIMENSION ||
+        Math.abs(deltaX) > ACT_MAX_VIEWPORT_DIMENSION ||
+        Math.abs(deltaY) > ACT_MAX_VIEWPORT_DIMENSION
+      ) {
+        throw new Error(
+          `scrollCoords requires x/y within 0..${ACT_MAX_VIEWPORT_DIMENSION} and pixel deltas within +/-${ACT_MAX_VIEWPORT_DIMENSION}`,
+        );
+      }
+      const targetId = toStringOrEmpty(body.targetId) || undefined;
+      return { kind, x, y, deltaX, deltaY, ...(targetId ? { targetId } : {}) };
+    }
     case "type": {
       const ref = toStringOrEmpty(body.ref) || undefined;
       const selector = toStringOrEmpty(body.selector) || undefined;

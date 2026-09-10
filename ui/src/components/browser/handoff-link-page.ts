@@ -1,4 +1,4 @@
-import { css, html, nothing } from "lit";
+import { css, html } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
 import { registerHumanInterventionEnglish } from "../../i18n/locales/en-human-intervention.ts";
@@ -25,12 +25,34 @@ class HandoffLinkPage extends OpenClawLitElement {
     `,
   ];
 
+  private readonly activateWhenVisible = () => {
+    if (
+      document.visibilityState === "visible" &&
+      !("prerendering" in document && document.prerendering === true)
+    ) {
+      document.removeEventListener("visibilitychange", this.activateWhenVisible);
+      document.removeEventListener("prerenderingchange", this.activateWhenVisible);
+      void this.takeControl();
+    }
+  };
+
   protected override firstUpdated(): void {
     window.dispatchEvent(new Event("openclaw-control-ui-rendered"));
+    // Opening a foreground link is the activation gesture. Hidden previews and
+    // prerendered documents must not consume the one-use credential.
+    document.addEventListener("visibilitychange", this.activateWhenVisible);
+    document.addEventListener("prerenderingchange", this.activateWhenVisible);
+    this.activateWhenVisible();
+  }
+
+  override disconnectedCallback(): void {
+    document.removeEventListener("visibilitychange", this.activateWhenVisible);
+    document.removeEventListener("prerenderingchange", this.activateWhenVisible);
+    super.disconnectedCallback();
   }
 
   private async takeControl() {
-    if (this.busy) {
+    if (this.busy || this.client || !this.isConnected) {
       return;
     }
     this.busy = true;
@@ -59,11 +81,18 @@ class HandoffLinkPage extends OpenClawLitElement {
     }
     return html`<main class="page">
       <h1>${t("humanBrowser.title")}</h1>
-      <p>${t("humanBrowser.linkExplanation")}</p>
-      ${this.error ? html`<p role="alert">${this.error}</p>` : nothing}
-      <button class="primary" ?disabled=${this.busy} @click=${() => void this.takeControl()}>
-        ${t(this.busy ? "humanBrowser.loading" : "humanBrowser.takeControl")}
-      </button>
+      ${
+        this.error
+          ? html`<p role="alert">${this.error}</p>
+              <button
+                class="primary"
+                ?disabled=${this.busy}
+                @click=${() => void this.takeControl()}
+              >
+                ${t("humanBrowser.retry")}
+              </button>`
+          : html`<p role="status">${t("humanBrowser.browserLoading")}</p>`
+      }
     </main>`;
   }
 }

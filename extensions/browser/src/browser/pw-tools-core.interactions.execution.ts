@@ -27,6 +27,7 @@ import {
   clickCoordsViaPlaywright,
   clickViaPlaywright,
   dragCoordsViaPlaywright,
+  scrollCoordsViaPlaywright,
   dragViaPlaywright,
   evaluateViaPlaywright,
   fillFormViaPlaywright,
@@ -103,6 +104,19 @@ async function executeSingleAction(
         y: action.y,
         endX: action.endX,
         endY: action.endY,
+        ...navigationPolicy,
+        signal,
+        assertCurrent,
+      });
+      break;
+    case "scrollCoords":
+      await scrollCoordsViaPlaywright({
+        cdpUrl,
+        targetId: effectiveTargetId,
+        x: action.x,
+        y: action.y,
+        deltaX: action.deltaX,
+        deltaY: action.deltaY,
         ...navigationPolicy,
         signal,
         assertCurrent,

@@ -232,7 +232,27 @@ describe("human intervention gateway", () => {
     expect(forwardBrowserRequest).not.toHaveBeenCalled();
   });
 
+  it.each([{ x: -1 }, { deltaY: Infinity }, { deltaX: 8193 }])(
+    "rejects malformed scrolling before forwarding %j",
+    async (invalid) => {
+      const { handlers, forwardBrowserRequest } = setup();
+      const response = await call(handlers.get("browser.handoff.browser"), {
+        id: "handoff-1",
+        controllerId: "phone-a",
+        generation: 2,
+        operation: "act",
+        action: { kind: "scroll", x: 12, y: 24, deltaX: 0, deltaY: 200, ...invalid },
+      });
+      expect(response.ok).toBe(false);
+      expect(forwardBrowserRequest).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
+    {
+      action: { kind: "scroll", x: 12, y: 24, deltaX: -10, deltaY: 240, targetId: "other" },
+      expected: { kind: "scrollCoords", x: 12, y: 24, deltaX: -10, deltaY: 240 },
+    },
     {
       action: { kind: "dragCoords", x: 12, y: 24, endX: 120, endY: 240, targetId: "other" },
       expected: { kind: "dragCoords", x: 12, y: 24, endX: 120, endY: 240 },

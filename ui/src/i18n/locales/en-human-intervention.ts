@@ -13,6 +13,7 @@ const catalog = {
       "The browser handoff request failed. Try again or ask your agent for a new link.",
     linkStorageError: "Allow site storage in this browser, then reopen the handoff link.",
     title: "Browser action needed",
+    taskDetails: "Task details",
     loading: "Loading browser handoff…",
     retry: "Try again",
     refreshStatus: "Refresh status",
@@ -36,7 +37,7 @@ const catalog = {
     sendText: "Send text",
     pressEnter: "Press Enter",
     tapAgainToType: "Tap the field again to type.",
-    gestureHint: "Use two fingers to scroll. Drag with one finger.",
+    gestureHint: "Swipe to scroll. Pinch to zoom.",
     browserLoading: "Connecting to the browser tab…",
   },
 } satisfies TranslationMap;

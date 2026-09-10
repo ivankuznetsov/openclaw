@@ -16,29 +16,53 @@ export const humanInterventionStyles = css`
     width: min(100%, 920px);
     min-height: 100dvh;
     margin: 0 auto;
-    padding: max(20px, var(--safe-area-top, 0px)) max(16px, var(--safe-area-right, 0px))
-      max(24px, var(--safe-area-bottom, 0px)) max(16px, var(--safe-area-left, 0px));
+    padding: max(12px, var(--safe-area-top, 0px)) max(12px, var(--safe-area-right, 0px))
+      max(12px, var(--safe-area-bottom, 0px)) max(12px, var(--safe-area-left, 0px));
     display: grid;
     align-content: start;
-    gap: 16px;
+    gap: 8px;
   }
 
+  .page--control {
+    height: 100dvh;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    align-content: stretch;
+  }
+  .heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .context {
+    font-size: 13px;
+    color: var(--muted);
+    max-height: 24dvh;
+    overflow: auto;
+  }
+  .context summary {
+    padding-block: 6px;
+  }
+  .context p {
+    margin-block: 6px;
+  }
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
   header {
     display: grid;
     gap: 6px;
   }
   h1 {
     margin: 0;
-    font-size: clamp(22px, 5vw, 32px);
+    font-size: clamp(16px, 3vw, 20px);
+    overflow-wrap: anywhere;
     line-height: 1.15;
-  }
-  .host {
-    font:
-      600 14px/1.4 ui-monospace,
-      SFMono-Regular,
-      Menlo,
-      monospace;
-    color: var(--muted);
   }
   .reason,
   .status,
@@ -59,9 +83,10 @@ export const humanInterventionStyles = css`
     border: 1px solid var(--border);
     border-radius: 14px;
     background: var(--bg-accent);
-    min-height: min(62dvh, 620px);
-    max-height: 68dvh;
-    touch-action: pan-x pan-y;
+    min-height: 0;
+    min-width: 0;
+    position: relative;
+    touch-action: none;
   }
 
   .frame {
@@ -76,7 +101,7 @@ export const humanInterventionStyles = css`
   }
 
   .viewer-empty {
-    min-height: min(62dvh, 620px);
+    height: 100%;
     display: grid;
     place-items: center;
     padding: 24px;
@@ -84,6 +109,18 @@ export const humanInterventionStyles = css`
     text-align: center;
   }
 
+  .hint {
+    position: sticky;
+    bottom: 8px;
+    width: fit-content;
+    margin: 8px auto;
+    padding: 6px 12px;
+    border-radius: 8px;
+    background: var(--bg-elevated);
+    color: var(--text);
+    font-size: 13px;
+    pointer-events: none;
+  }
   .toolbar,
   .actions {
     display: flex;
@@ -130,15 +167,25 @@ export const humanInterventionStyles = css`
     cursor: default;
   }
 
+  @media (pointer: coarse) {
+    .toolbar {
+      display: none;
+    }
+  }
   @media (max-width: 640px) {
     .page {
-      padding-inline: 12px;
-      gap: 12px;
+      padding-inline: max(6px, var(--safe-area-left, 0px));
+      gap: 6px;
     }
-    .viewer,
-    .viewer-empty {
-      min-height: 54dvh;
-      max-height: 60dvh;
+    header {
+      padding-inline: 6px;
+      gap: 0;
+    }
+    .toolbar {
+      display: none;
+    }
+    .viewer {
+      border-radius: 8px;
     }
     .actions button {
       flex: 1 1 auto;

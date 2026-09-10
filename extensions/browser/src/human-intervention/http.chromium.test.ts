@@ -110,13 +110,13 @@ describe.runIf(process.env.OPENCLAW_BROWSER_HANDOFF_E2E === "1")(
           const endpoint = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
           const page = browser.pages()[0] ?? (await browser.newPage());
           await page.setContent(
-            `<button style="position:absolute;left:0;top:0;width:100px;height:100px" onclick="this.textContent=String(Number(this.textContent)+1)">0</button>
+            `<style>body{min-height:3000px;min-width:3000px}</style><button style="position:absolute;left:0;top:0;width:100px;height:100px" onclick="this.textContent=String(Number(this.textContent)+1)">0</button>
             <input id="text" value="[]" style="position:absolute;left:0;top:120px;width:200px;height:40px">
             <iframe style="position:absolute;left:0;top:200px;width:300px;height:100px;border:0" srcdoc="<input value='frame:' style='width:200px;height:40px'>"></iframe>`,
           );
           const otherPage = await browser.newPage();
           await otherPage.setContent(
-            '<button style="position:absolute;left:0;top:0;width:100px;height:100px" onclick="this.textContent=String(Number(this.textContent)+1)">0</button>',
+            '<style>body{min-height:3000px;min-width:3000px}</style><button style="position:absolute;left:0;top:0;width:100px;height:100px" onclick="this.textContent=String(Number(this.textContent)+1)">0</button>',
           );
           const otherCdp = await browser.newCDPSession(otherPage);
           const otherTarget = await otherCdp.send("Target.getTargetInfo");
@@ -195,15 +195,46 @@ describe.runIf(process.env.OPENCLAW_BROWSER_HANDOFF_E2E === "1")(
           const assertRejected = async (body: unknown, handoffId = id) => {
             const beforeDispatch = dispatched;
             const beforeText = await page.locator("button").textContent();
+            const beforeScroll = await page.evaluate(() => [scrollX, scrollY]);
             expect((await post(body, handoffId)).status).toBe(403);
             expect(dispatched).toBe(beforeDispatch);
             expect(await page.locator("button").textContent()).toBe(beforeText);
+            expect(await page.evaluate(() => [scrollX, scrollY])).toEqual(beforeScroll);
           };
           const other = await coordinator.service.request({
             ...pending.record,
             browser: { target: "host", profile: "other", targetId: "other-tab" },
           });
           await assertRejected(click, other.id);
+          const scroll = {
+            ...click,
+            input: {
+              kind: "scroll",
+              targetId: otherTarget.targetInfo.targetId,
+              x: 30,
+              y: 140,
+              deltaX: 100,
+              deltaY: 200,
+            },
+          };
+          await assertRejected(scroll, other.id);
+          expect((await act({ kind: "clickCoords", x: 30, y: 140 })).status).toBe(200);
+          expect((await post(scroll)).status).toBe(200);
+          await expect.poll(() => page.evaluate(() => [scrollX, scrollY])).toEqual([100, 200]);
+          expect(await otherPage.evaluate(() => [scrollX, scrollY])).toEqual([0, 0]);
+          expect(await page.locator("#text").inputValue()).toBe("[abcd]");
+          expect(
+            await page.locator("#text").evaluate((element) => element === document.activeElement),
+          ).toBe(true);
+          expect(
+            (
+              await post({
+                ...scroll,
+                input: { ...scroll.input, x: 400, y: 400, deltaX: -100, deltaY: -200 },
+              })
+            ).status,
+          ).toBe(200);
+          await expect.poll(() => page.evaluate(() => [scrollX, scrollY])).toEqual([0, 0]);
           await assertRejected({ ...click, operation: "navigate", url: "https://example.com" });
           await assertRejected({ action: "config.set", value: "forbidden" });
 

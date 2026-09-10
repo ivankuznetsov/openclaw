@@ -5,6 +5,24 @@ import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.norma
 
 const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
 
+describe("normalizeActRequest pixel scrolling", () => {
+  const input = { kind: "scrollCoords", x: 12.5, y: 20, deltaX: -10.25, deltaY: 240 };
+  it("preserves pixel deltas", () => {
+    expect(normalizeActRequest(input)).toEqual(input);
+  });
+  it.each([
+    { x: -1 },
+    { y: 8193 },
+    { deltaX: -8193 },
+    { deltaY: 8193 },
+    { x: Number.NaN },
+    { deltaY: Number.POSITIVE_INFINITY },
+    { deltaX: undefined },
+  ])("rejects invalid coordinate or delta %j", (invalid) => {
+    expect(() => normalizeActRequest({ ...input, ...invalid })).toThrow();
+  });
+});
+
 describe("canonicalizeActTargetIds", () => {
   const canonical = "abcd1234";
   const tab = { targetId: canonical, suggestedTargetId: "sg-1", tabId: "tab-7", label: "Inbox" };

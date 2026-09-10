@@ -344,6 +344,8 @@ function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string
       return null;
     case "dragCoords":
       return "dragCoords is not supported for existing-session browser profiles";
+    case "scrollCoords":
+      return "scrollCoords is not supported for existing-session browser profiles";
     case "type":
       if (action.insertText) {
         return "insertText is not supported for existing-session browser profiles";
@@ -591,6 +593,10 @@ export function registerBrowserAgentActRoutes(
                 throw new Error(
                   "dragCoords is not supported for existing-session browser profiles",
                 );
+              case "scrollCoords":
+                throw new Error(
+                  "scrollCoords is not supported for existing-session browser profiles",
+                );
               case "type":
                 await runGuardedAction(async () => {
                   await fillChromeMcpElement({
@@ -767,6 +773,7 @@ export function registerBrowserAgentActRoutes(
             case "click":
             case "clickCoords":
             case "dragCoords":
+            case "scrollCoords":
               return await jsonOk(actionMetadata, resultTargetOptions);
             case "resize":
             case "close":

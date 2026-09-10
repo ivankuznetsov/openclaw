@@ -123,6 +123,8 @@ async function mountReadyPanel() {
     ),
   );
 
+  const frame = panel.shadowRoot!.querySelector<HTMLImageElement>(".frame")!;
+  vi.spyOn(frame, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 800));
   return { panel, request, sockets };
 }
 
@@ -433,7 +435,7 @@ describe("human browser intervention panel", () => {
     const frame = panel.shadowRoot!.querySelector<HTMLImageElement>(".frame")!;
     const tap = () => {
       for (const type of ["pointerdown", "pointerup"]) {
-        const event = new MouseEvent(type, { clientX: 20, clientY: 20 });
+        const event = new MouseEvent(type, { bubbles: true, clientX: 20, clientY: 20 });
         Object.defineProperty(event, "pointerId", { value: 1 });
         frame.dispatchEvent(event);
       }
@@ -456,7 +458,7 @@ describe("human browser intervention panel", () => {
     vi.spyOn(frame, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 800));
     const tap = (x: number) => {
       for (const type of ["pointerdown", "pointerup"]) {
-        const event = new MouseEvent(type, { clientX: x, clientY: 20 });
+        const event = new MouseEvent(type, { bubbles: true, clientX: x, clientY: 20 });
         Object.defineProperties(event, {
           pointerId: { value: 1 },
           pointerType: { value: "touch" },
@@ -512,7 +514,7 @@ describe("human browser intervention panel", () => {
       const frame = panel.shadowRoot!.querySelector<HTMLImageElement>(".frame")!;
       const tap = () => {
         for (const type of ["pointerdown", "pointerup"]) {
-          const event = new MouseEvent(type, { clientX: 20, clientY: 20 });
+          const event = new MouseEvent(type, { bubbles: true, clientX: 20, clientY: 20 });
           Object.defineProperties(event, {
             pointerId: { value: 1 },
             pointerType: { value: "touch" },
@@ -566,7 +568,7 @@ describe("human browser intervention panel", () => {
     const frame = panel.shadowRoot!.querySelector<HTMLImageElement>(".frame")!;
     request.mockResolvedValueOnce({ ok: true, focusedEditable: true });
     for (const type of ["pointerdown", "pointerup"]) {
-      const event = new MouseEvent(type, { clientX: 20, clientY: 20 });
+      const event = new MouseEvent(type, { bubbles: true, clientX: 20, clientY: 20 });
       Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: "touch" } });
       frame.dispatchEvent(event);
     }
@@ -594,7 +596,7 @@ describe("human browser intervention panel", () => {
     );
     const tap = (x: number) => {
       for (const type of ["pointerdown", "pointerup"]) {
-        const event = new MouseEvent(type, { clientX: x, clientY: 20 });
+        const event = new MouseEvent(type, { bubbles: true, clientX: x, clientY: 20 });
         Object.defineProperties(event, {
           pointerId: { value: 1 },
           pointerType: { value: "touch" },
@@ -614,31 +616,213 @@ describe("human browser intervention panel", () => {
     expect(panel.shadowRoot!.textContent).not.toContain("Tap the field again to type");
   });
 
-  it("uses a two-finger swipe for scroll without sending a leftover click or drag", async () => {
+  it("pinches and pans locally without remote input or a trailing one-finger action", async () => {
     const { panel, request } = await mountReadyPanel();
     request.mockClear();
+    const viewer = panel.shadowRoot!.querySelector<HTMLElement>(".viewer")!;
     const frame = panel.shadowRoot!.querySelector<HTMLImageElement>(".frame")!;
-    const pointer = (type: string, pointerId: number, clientY: number) => {
-      const event = new MouseEvent(type, { clientX: 20, clientY });
+    const pointer = (type: string, pointerId: number, clientX: number, clientY: number) => {
+      const event = new MouseEvent(type, { clientX, clientY });
       Object.defineProperties(event, {
         pointerId: { value: pointerId },
         pointerType: { value: "touch" },
       });
-      frame.dispatchEvent(event);
+      viewer.dispatchEvent(event);
     };
-    pointer("pointerdown", 1, 100);
-    pointer("pointerdown", 2, 100);
-    pointer("pointermove", 1, 30);
-    pointer("pointermove", 2, 30);
-    pointer("pointerup", 1, 30);
-    pointer("pointerup", 2, 30);
+    pointer("pointerdown", 1, 100, 100);
+    pointer("pointerdown", 2, 200, 100);
+    pointer("pointermove", 1, 80, 80);
+    pointer("pointermove", 2, 240, 120);
+    expect(Number(frame.style.getPropertyValue("--human-browser-zoom"))).toBeGreaterThan(1.5);
+    pointer("pointerup", 1, 80, 80);
+    pointer("pointermove", 2, 240, 300);
+    pointer("pointerup", 2, 240, 300);
+    await panel.updateComplete;
+    expect(request).not.toHaveBeenCalled();
+    expect(panel.shadowRoot!.activeElement).not.toBe(
+      panel.shadowRoot!.querySelector(".canvas-keyboard"),
+    );
+  });
+
+  it("scrolls while one finger moves over blank viewer space and coalesces pending wheel input", async () => {
+    const { panel, request } = await mountReadyPanel();
+    request.mockClear();
+    const viewer = panel.shadowRoot!.querySelector<HTMLElement>(".viewer")!;
+    const frame = panel.shadowRoot!.querySelector<HTMLImageElement>(".frame")!;
+    vi.spyOn(frame, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 400));
+    let finishWheel!: () => void;
+    request.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishWheel = () => resolve({ ok: true });
+        }),
+    );
+    const pointer = (type: string, clientY: number) => {
+      const event = new MouseEvent(type, { clientX: 500, clientY });
+      Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: "touch" } });
+      viewer.dispatchEvent(event);
+    };
+    pointer("pointerdown", 700);
+    pointer("pointermove", 620);
+    // No pointerup yet: scrolling must be responsive during the gesture.
     await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
     expect(request).toHaveBeenCalledWith(
       "browser.handoff.browser",
-      expect.objectContaining({ action: { kind: "press", key: "PageDown" } }),
+      expect.objectContaining({
+        action: { kind: "scroll", x: 500, y: 799, deltaX: 0, deltaY: 160 },
+      }),
     );
-    expect(panel.shadowRoot!.activeElement).not.toBe(
-      panel.shadowRoot!.querySelector(".canvas-keyboard"),
+    pointer("pointermove", 580);
+    pointer("pointermove", 550);
+    pointer("pointerup", 550);
+    expect(request).toHaveBeenCalledTimes(1);
+    finishWheel();
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    expect(request).toHaveBeenLastCalledWith(
+      "browser.handoff.browser",
+      expect.objectContaining({
+        action: { kind: "scroll", x: 500, y: 799, deltaX: 0, deltaY: 140 },
+      }),
+    );
+  });
+
+  it.each(["key-first", "scroll-first", "touch-up"] as const)(
+    "preserves shared input order for %s behind an in-flight wheel",
+    async (order) => {
+      const { panel, request } = await mountReadyPanel();
+      request.mockClear();
+      const viewer = panel.shadowRoot!.querySelector<HTMLElement>(".viewer")!;
+      const keyboard = panel.shadowRoot!.querySelector<HTMLTextAreaElement>(".canvas-keyboard")!;
+      let finishFirst!: () => void;
+      request.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finishFirst = () => resolve({ ok: true });
+          }),
+      );
+      const touch = (type: string, clientY: number) => {
+        const event = new MouseEvent(type, { clientX: 20, clientY });
+        Object.defineProperties(event, {
+          pointerId: { value: 1 },
+          pointerType: { value: "touch" },
+        });
+        viewer.dispatchEvent(event);
+      };
+      if (order === "touch-up") {
+        touch("pointerdown", 100);
+        touch("pointermove", 90);
+      } else {
+        viewer.dispatchEvent(new WheelEvent("wheel", { deltaY: 10 }));
+      }
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
+      const key = () =>
+        keyboard.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowLeft", cancelable: true }),
+        );
+      if (order !== "scroll-first") {
+        key();
+      }
+      if (order === "touch-up") {
+        touch("pointerup", 70);
+      } else {
+        viewer.dispatchEvent(new WheelEvent("wheel", { deltaY: 20 }));
+      }
+      if (order === "scroll-first") {
+        key();
+      }
+      await panel.updateComplete;
+      expect(request).toHaveBeenCalledTimes(1);
+      finishFirst();
+      await waitForFast(() =>
+        expect(
+          panel.shadowRoot!.querySelector<HTMLButtonElement>("[data-complete]")!.disabled,
+        ).toBe(false),
+      );
+      const actions = request.mock.calls.map((call) => (call[1] as { action: unknown }).action);
+      const first = expect.objectContaining({ kind: "scroll", deltaY: 10 });
+      const second = expect.objectContaining({ kind: "scroll", deltaY: 20 });
+      const typed = { kind: "press", key: "ArrowLeft" };
+      expect(actions).toEqual(
+        order === "scroll-first" ? [first, second, typed] : [first, typed, second],
+      );
+    },
+  );
+
+  it("delivers a new controller's pending wheel after the old controller's input settles", async () => {
+    const { panel, request, sockets } = await mountReadyPanel();
+    let finishOldWheel!: () => void;
+    request.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishOldWheel = () => resolve({ ok: true });
+        }),
+    );
+    panel
+      .shadowRoot!.querySelector(".viewer")!
+      .dispatchEvent(new WheelEvent("wheel", { deltaY: 40 }));
+    await waitForFast(() => expect(finishOldWheel).toBeTypeOf("function"));
+    const replacement = createClient();
+    panel.autoClaim = true;
+    panel.client = replacement.client;
+    await waitForFast(() => expect(sockets).toHaveLength(2));
+    sockets[1]!.dispatchEvent(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          type: "ready",
+          targetId: "tab-1",
+          url: "https://accounts.example/challenge",
+          title: "Challenge",
+        }),
+      }),
+    );
+    sockets[1]!.dispatchEvent(
+      new MessageEvent("message", { data: screencastFrame("https://accounts.example/challenge") }),
+    );
+    await waitForFast(() =>
+      expect(
+        panel.shadowRoot!.querySelector<HTMLTextAreaElement>(".canvas-keyboard")?.disabled,
+      ).toBe(false),
+    );
+    vi.spyOn(
+      panel.shadowRoot!.querySelector<HTMLImageElement>(".frame")!,
+      "getBoundingClientRect",
+    ).mockReturnValue(new DOMRect(0, 0, 1000, 800));
+    replacement.request.mockClear();
+    panel
+      .shadowRoot!.querySelector(".viewer")!
+      .dispatchEvent(new WheelEvent("wheel", { deltaY: 60 }));
+    expect(replacement.request).not.toHaveBeenCalled();
+    finishOldWheel();
+    await waitForFast(() => expect(replacement.request).toHaveBeenCalledTimes(1));
+    expect(replacement.request).toHaveBeenCalledWith(
+      "browser.handoff.browser",
+      expect.objectContaining({ action: expect.objectContaining({ kind: "scroll", deltaY: 60 }) }),
+    );
+  });
+
+  it("rejects blank viewer taps while preserving image taps and mouse dragging", async () => {
+    const { panel, request } = await mountReadyPanel();
+    request.mockClear();
+    const viewer = panel.shadowRoot!.querySelector<HTMLElement>(".viewer")!;
+    const frame = panel.shadowRoot!.querySelector<HTMLImageElement>(".frame")!;
+    vi.spyOn(frame, "getBoundingClientRect").mockReturnValue(new DOMRect(0, 0, 1000, 400));
+    const pointer = (type: string, clientX: number, clientY: number) => {
+      const event = new MouseEvent(type, { clientX, clientY });
+      Object.defineProperties(event, { pointerId: { value: 1 }, pointerType: { value: "mouse" } });
+      viewer.dispatchEvent(event);
+    };
+    pointer("pointerdown", 500, 700);
+    pointer("pointerup", 500, 700);
+    await panel.updateComplete;
+    expect(request).not.toHaveBeenCalled();
+    pointer("pointerdown", 100, 100);
+    pointer("pointerup", 200, 200);
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
+    expect(request).toHaveBeenCalledWith(
+      "browser.handoff.browser",
+      expect.objectContaining({
+        action: { kind: "dragCoords", x: 100, y: 200, endX: 200, endY: 400 },
+      }),
     );
   });
 

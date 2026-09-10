@@ -136,6 +136,7 @@ function resolveLeafExecutionBudgetMs(
       );
     }
     case "dragCoords":
+    case "scrollCoords":
       return addNavigationGraceMs(resolveInteractionTimeoutMs(request));
     case "type": {
       const phaseCount = (request.slowly ? 2 : 1) + (request.submit ? 1 : 0);

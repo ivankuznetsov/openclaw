@@ -4,7 +4,6 @@ import type {
   HumanInterventionResponse as HandoffResponse,
   HumanInterventionView,
 } from "@openclaw/gateway-protocol";
-import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { t } from "../../i18n/index.ts";
 import { registerHumanInterventionEnglish } from "../../i18n/locales/en-human-intervention.ts";
@@ -18,12 +17,14 @@ import {
 import type { HumanInterventionClient } from "./handoff-http-client.ts";
 import {
   HumanBrowserPointerGesture,
+  mergeHumanBrowserScroll,
+  type HumanBrowserScroll,
+  applyHumanBrowserViewport,
+  humanBrowserWheel,
   isSameHumanBrowserPoint,
-  humanBrowserBeforeInput,
-  humanBrowserTextInput,
-  humanBrowserKeyInput,
 } from "./human-intervention-input.ts";
 import { humanInterventionStyles } from "./human-intervention-panel.styles.ts";
+import { renderHumanIntervention } from "./human-intervention-view.ts";
 
 registerHumanInterventionEnglish();
 
@@ -60,6 +61,9 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
 
   private connection: ViewerConnection | null = null;
   private readonly pointerGesture = new HumanBrowserPointerGesture();
+  private pendingScroll?: { action: HumanBrowserScroll; session: ControlSession; epoch: number };
+  private scrollEpoch = 0;
+  private scrollPending = 0;
   @state() private armedTouch?: { x: number; y: number };
   private focusEpoch = 0;
   private framePageUrl = "";
@@ -321,6 +325,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
     this.frameHeight = 0;
     this.framePageUrl = "";
     this.pointerGesture.clear();
+    this.clearScroll();
     this.clearTouchKeyboard();
   }
 
@@ -414,6 +419,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
       void this.releaseSession(session).catch(() => {});
       return;
     }
+    this.pendingScroll = undefined;
     this.armedTouch = undefined;
     const epoch = this.focusEpoch;
     this.keyboardPending += 1;
@@ -440,24 +446,131 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   }
 
   private pointerDown(event: PointerEvent): void {
-    if (!this.isController() || this.inputBusy || this.busy || this.keyboardPending > 0) {
+    if (
+      !this.isController() ||
+      this.busy ||
+      this.keyboardPending > this.scrollPending ||
+      (this.inputBusy && this.scrollPending === 0)
+    ) {
       this.clearTouchKeyboard();
       return;
     }
     if (this.pointerGesture.down(event)) {
+      this.clearScroll();
       this.clearTouchKeyboard();
     }
   }
 
   private cancelPointers(): void {
     this.pointerGesture.clear();
+    this.clearScroll();
     this.clearTouchKeyboard();
   }
 
+  private pointerMove(event: PointerEvent): void {
+    const viewer = event.currentTarget;
+    const frame =
+      viewer instanceof HTMLElement ? viewer.querySelector<HTMLImageElement>(".frame") : null;
+    if (!frame || !(viewer instanceof HTMLElement)) {
+      return;
+    }
+    const motion = this.pointerGesture.move(event, frame.getBoundingClientRect(), {
+      width: this.frameWidth,
+      height: this.frameHeight,
+    });
+    if (!motion) {
+      return;
+    }
+    this.armedTouch = undefined;
+    if (motion.kind === "scroll") {
+      this.queueScroll(motion);
+    } else {
+      this.clearTouchKeyboard();
+      this.clearScroll();
+      this.zoom = applyHumanBrowserViewport(viewer, frame, motion, this.zoom);
+    }
+  }
+
+  private clearScroll(): void {
+    this.pendingScroll = undefined;
+    this.scrollEpoch += 1;
+  }
+
+  private queueScroll(action: HumanBrowserScroll): void {
+    const session = this.control;
+    if (!session || !this.ownsControl(session) || this.busy) {
+      return;
+    }
+    const pending = this.pendingScroll;
+    if (pending?.session === session && pending.epoch === this.scrollEpoch) {
+      pending.action = mergeHumanBrowserScroll(pending.action, action);
+      return;
+    }
+    if (this.keyboardPending >= 128) {
+      this.error = t("humanBrowser.linkRequestError");
+      this.stopControl(session);
+      void this.releaseSession(session).catch(() => {});
+      return;
+    }
+    const batch = {
+      action: mergeHumanBrowserScroll(undefined, action),
+      session,
+      epoch: this.scrollEpoch,
+    };
+    this.pendingScroll = batch;
+    this.scrollPending += 1;
+    this.keyboardPending += 1;
+    this.keyboardQueue = this.keyboardQueue.then(async () => {
+      try {
+        if (this.pendingScroll === batch) {
+          this.pendingScroll = undefined;
+        }
+        await session.inputOperation;
+        if (!this.ownsControl(session) || batch.epoch !== this.scrollEpoch) {
+          return;
+        }
+        if (!(await this.act(batch.action)) && this.ownsControl(session)) {
+          this.stopControl(session);
+          await this.releaseSession(session).catch(() => {});
+        }
+      } finally {
+        this.scrollPending -= 1;
+        this.keyboardPending -= 1;
+      }
+    });
+  }
+
+  private wheel(event: WheelEvent): void {
+    event.preventDefault();
+    const viewer = event.currentTarget;
+    const frame =
+      viewer instanceof HTMLElement ? viewer.querySelector<HTMLImageElement>(".frame") : null;
+    if (!frame) {
+      return;
+    }
+    this.armedTouch = undefined;
+    this.queueScroll(
+      humanBrowserWheel(event, frame, { width: this.frameWidth, height: this.frameHeight }),
+    );
+  }
+
   private pointerUp(event: PointerEvent): void {
+    const viewer = event.currentTarget;
+    const frame =
+      viewer instanceof HTMLElement ? viewer.querySelector<HTMLImageElement>(".frame") : null;
+    if (!frame) {
+      this.cancelPointers();
+      return;
+    }
     const remote = { width: this.frameWidth, height: this.frameHeight };
-    const action = this.pointerGesture.up(event, remote);
+    const bounds = frame.getBoundingClientRect();
+    const action = this.pointerGesture.up(event, bounds, remote);
     if (!action) {
+      return;
+    }
+    if (action.kind === "scroll") {
+      this.armedTouch = undefined;
+      this.queueScroll(action);
       return;
     }
     const touch = event.pointerType === "touch";
@@ -465,13 +578,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
       action.kind === "clickCoords" &&
       touch &&
       this.armedTouch &&
-      event.currentTarget instanceof HTMLImageElement &&
-      isSameHumanBrowserPoint(
-        this.armedTouch,
-        action,
-        event.currentTarget.getBoundingClientRect(),
-        remote,
-      );
+      isSameHumanBrowserPoint(this.armedTouch, action, bounds, remote);
     this.clearTouchKeyboard();
     if (activate && this.isController() && !this.inputBusy && !this.busy) {
       // Mobile keyboards require focus in the trusted tap handler, before an await.
@@ -479,11 +586,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
         ?.querySelector<HTMLTextAreaElement>(".canvas-keyboard")
         ?.focus({ preventScroll: true });
     }
-    if (action.kind === "press") {
-      this.queueKeyboard(action);
-    } else {
-      void this.act(action, { touch: touch && !activate, epoch: this.focusEpoch });
-    }
+    void this.act(action, { touch: touch && !activate, epoch: this.focusEpoch });
   }
 
   private async releaseSession(session: ControlSession): Promise<HandoffResponse> {
@@ -578,156 +681,50 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   }
 
   private statusText(): string {
-    if (this.handoff?.state === "resume_pending") {
-      return t("humanBrowser.resumePending");
+    const handoffState = this.handoff?.state ?? "waiting";
+    if (handoffState === "control") {
+      return t(this.isController() ? "humanBrowser.control" : "humanBrowser.controlElsewhere");
     }
-    if (this.handoff?.state === "resumed") {
-      return t("humanBrowser.continuationQueued");
-    }
-    if (this.handoff?.state === "cancelled") {
-      return t("humanBrowser.cancelled");
-    }
-    if (this.handoff?.state === "expired") {
-      return t("humanBrowser.expired");
-    }
-    if (this.handoff?.state === "control") {
-      return this.isController() ? t("humanBrowser.control") : t("humanBrowser.controlElsewhere");
-    }
-    return t("humanBrowser.waiting");
+    return t(
+      {
+        resume_pending: "humanBrowser.resumePending",
+        resumed: "humanBrowser.continuationQueued",
+        cancelled: "humanBrowser.cancelled",
+        expired: "humanBrowser.expired",
+        waiting: "humanBrowser.waiting",
+      }[handoffState],
+    );
   }
 
   override render() {
-    if (!this.available) {
-      return html`<main class="page"><p>${t("humanBrowser.unavailable")}</p></main>`;
-    }
-    if (this.loading) {
-      return html`<main class="page"><p>${t("humanBrowser.loading")}</p></main>`;
-    }
-    if (!this.handoff) {
-      return html`
-        <main class="page">
-          ${this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}
-          <div class="actions">
-            <button class="primary" data-retry @click=${() => this.retry()}>
-              ${t("humanBrowser.retry")}
-            </button>
-          </div>
-        </main>
-      `;
-    }
-    const terminal = ["resume_pending", "resumed", "cancelled", "expired"].includes(
-      this.handoff.state,
-    );
-    const controlling = this.isController();
-    return html`
-      <main class="page">
-        <header>
-          <h1>${t("humanBrowser.title")}</h1>
-          ${this.handoff.hostname ? html`<div class="host">${this.handoff.hostname}</div>` : nothing}
-          ${this.handoff.reason ? html`<p class="reason">${this.handoff.reason}</p>` : nothing}
-          <p class="status" role="status">${this.statusText()}</p>
-          ${this.error ? html`<p class="error" role="alert">${this.error}</p>` : nothing}
-        </header>
-
-        ${
-          controlling
-            ? html`
-                <div class="toolbar">
-                  <button
-                    aria-label=${t("humanBrowser.zoomOut")}
-                    @click=${() => {
-                      this.zoom = Math.max(1, this.zoom - 0.25);
-                    }}
-                  >
-                    −
-                  </button>
-                  <button
-                    aria-label=${t("humanBrowser.zoomIn")}
-                    @click=${() => {
-                      this.zoom = Math.min(3, this.zoom + 0.25);
-                    }}
-                  >
-                    +
-                  </button>
-                </div>
-                <p class="hint">
-                  ${t(this.armedTouch ? "humanBrowser.tapAgainToType" : "humanBrowser.gestureHint")}
-                </p>
-                <div
-                  class="viewer"
-                  @wheel=${(event: WheelEvent) => {
-                    event.preventDefault();
-                    this.clearTouchKeyboard();
-                    void this.act({
-                      kind: "press",
-                      key: event.deltaY >= 0 ? "PageDown" : "PageUp",
-                    });
-                  }}
-                >
-                  ${
-                    this.frameUrl
-                      ? html`<img
-                          class="frame"
-                          style=${`--human-browser-zoom: ${this.zoom}`}
-                          src=${this.frameUrl}
-                          alt=${this.handoff?.hostname ?? "Remote browser tab"}
-                          draggable="false"
-                          @pointerdown=${(event: PointerEvent) => this.pointerDown(event)}
-                          @pointerup=${(event: PointerEvent) => this.pointerUp(event)}
-                          @pointermove=${(event: PointerEvent) => this.pointerGesture.move(event)}
-                          @pointercancel=${() => this.cancelPointers()}
-                        />`
-                      : html`<div class="viewer-empty">${t("humanBrowser.browserLoading")}</div>`
-                  }
-                </div>
-                <textarea
-                  class="canvas-keyboard"
-                  aria-label=${t("humanBrowser.typePlaceholder")}
-                  ?disabled=${!controlling || this.streamStatus !== "connected" || !this.frameUrl || this.busy}
-                  autocomplete="off"
-                  autocapitalize="off"
-                  spellcheck="false"
-                  @beforeinput=${(event: InputEvent) => this.queueKeyboard(humanBrowserBeforeInput(event))}
-                  @input=${(event: InputEvent) => this.queueKeyboard(humanBrowserTextInput(event))}
-                  @compositionend=${(event: CompositionEvent) => this.queueKeyboard(humanBrowserTextInput(event))}
-                  @keydown=${(event: KeyboardEvent) => this.queueKeyboard(humanBrowserKeyInput(event))}
-                ></textarea>
-              `
-            : nothing
-        }
-        ${
-          !terminal
-            ? html`<div class="actions">
-                ${this.handoff?.state === "waiting" || (this.handoff?.state === "control" && !controlling) ? html`<button class="primary" data-take-control ?disabled=${this.busy} @click=${() => void this.claim()}>${t("humanBrowser.takeControl")}</button>` : nothing}
-                ${
-                  controlling
-                    ? html`
-                        <button
-                          class="primary"
-                          data-complete
-                          ?disabled=${this.busy || this.inputBusy || this.keyboardPending > 0}
-                          @click=${() => void this.finish("browser.handoff.complete")}
-                        >
-                          ${t("humanBrowser.done")}
-                        </button>
-                      `
-                    : nothing
-                }
-                <button
-                  class="danger"
-                  ?disabled=${this.busy || this.inputBusy || this.keyboardPending > 0}
-                  @click=${() => void this.finish("browser.handoff.cancel")}
-                >
-                  ${t("humanBrowser.cancel")}
-                </button>
-              </div>`
-            : html`<div class="actions">
-                ${this.handoff.state === "resume_pending" ? html`<button data-refresh-status @click=${() => this.retry()}>${t("humanBrowser.refreshStatus")}</button>` : nothing}
-                <button @click=${() => this.onDocumentClose?.()}>${t("common.close")}</button>
-              </div>`
-        }
-      </main>
-    `;
+    return renderHumanIntervention({
+      available: this.available,
+      loading: this.loading,
+      handoff: this.handoff,
+      error: this.error,
+      controlling: this.isController(),
+      statusText: this.statusText(),
+      zoom: this.zoom,
+      armedTouch: Boolean(this.armedTouch),
+      frameUrl: this.frameUrl,
+      busy: this.busy,
+      controlsDisabled: this.busy || this.inputBusy || this.keyboardPending > 0,
+      keyboardDisabled: this.streamStatus !== "connected" || !this.frameUrl || this.busy,
+      retry: () => this.retry(),
+      claim: () => void this.claim(),
+      complete: () => void this.finish("browser.handoff.complete"),
+      cancel: () => void this.finish("browser.handoff.cancel"),
+      close: () => this.onDocumentClose?.(),
+      zoomBy: (delta) => {
+        this.zoom = Math.max(1, Math.min(3, this.zoom + delta));
+      },
+      pointerDown: (event) => this.pointerDown(event),
+      pointerUp: (event) => this.pointerUp(event),
+      pointerMove: (event) => this.pointerMove(event),
+      cancelPointers: () => this.cancelPointers(),
+      wheel: (event) => this.wheel(event),
+      queueKeyboard: (action) => this.queueKeyboard(action),
+    });
   }
 }
 

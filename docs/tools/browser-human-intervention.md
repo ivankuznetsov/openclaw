@@ -40,7 +40,7 @@ The phone must be able to reach the same HTTPS Gateway origin used by the Contro
 
 The agent must also have access to the `browser` tool. The `coding` tool profile does not include it; add `browser` to the existing `tools.alsoAllow` list, preserving any other entries. Explicit deny rules still apply. See [Browser tool access](/tools/browser).
 
-The chat link includes a one-use credential that expires after 10 minutes, or when the handoff expires, whichever comes first. Select **Take control** to redeem it. No Gateway token, administrator pairing, or server command is required. Link previews do not redeem the credential.
+The chat link includes a one-use credential that expires after 10 minutes, or when the handoff expires, whichever comes first. Opening the link in a foreground browser tab redeems it and opens the browser viewer directly. No Gateway token, administrator pairing, or server command is required. Ordinary link previews do not receive the URL-fragment credential. Hidden and prerendered viewer documents wait until they are visible before redeeming it.
 
 Treat the link as private: anyone who receives an unused link can redeem it. The resulting browser session can view and operate only the selected handoff until it ends or expires. It cannot access Gateway settings, chats, shell commands, or other tabs. The credential is kept in this browser tab's session storage; it is not added to the normal Gateway login store. Gateway administrators retain their existing access through the authenticated Control UI.
 
@@ -53,7 +53,7 @@ When the agent encounters a CAPTCHA, login/2FA, or another step only you can com
 3. Sends the site hostname, short reason, and HTTPS link to the originating direct chat.
 4. Keeps the browser process, profile, and tab alive while the task is paused.
 
-Open the link and select **Take control**. The page supports taps, drags, page scrolling, local zoom, and direct keyboard input. On a touch screen, tap a text field to select it, then tap it again when prompted to open the keyboard. Drag with one finger to move page elements and swipe with two fingers to scroll the remote page. It does not expose browser navigation commands, evaluation, cookies, files, shell access, or other browser profiles. Clicking links or typing into the page can still navigate within the selected tab; access is scoped to the tab, not to one website.
+Open the link to enter the browser viewer. The page supports taps, drags, page scrolling, local zoom, and direct keyboard input. On a touch screen, tap a text field to select it, then tap it again when prompted to open the keyboard. Swipe with one finger anywhere in the viewer to scroll the remote page. Pinch with two fingers to zoom locally, and move both fingers to pan the zoomed view. Mouse dragging still moves page elements on desktop. Mobile zoom buttons are hidden, and task instructions are available under **Task details**. It does not expose browser navigation commands, evaluation, cookies, files, shell access, or other browser profiles. Clicking links or typing into the page can still navigate within the selected tab; access is scoped to the tab, not to one website.
 
 - **Done — continue agent** revokes human input and schedules the original session to inspect fresh page state before continuing.
 - **Cancel handoff** ends the handoff without resuming the task.
@@ -72,7 +72,7 @@ Native iOS and Android users can open the same link in their mobile browser. A d
 
 To test automatic handoff, give the agent a normal browser task whose page requires a human-only step, without mentioning handoff in your request. It should send the link and pause on that step.
 
-For a basic control test, start with a harmless form page that does not require credentials. In an owner-authorized direct chat, ask the agent to open the page in a managed browser profile and request human help before submitting it. Open the handoff link from another device, select **Take control**, enter a non-sensitive test value, and select **Done — continue agent**. The original chat should receive the resumed agent turn, and the agent should inspect the same tab before continuing.
+For a basic control test, start with a harmless form page that does not require credentials. In an owner-authorized direct chat, ask the agent to open the page in a managed browser profile and request human help before submitting it. Open the handoff link from another device, enter a non-sensitive test value, and select **Done — continue agent**. The original chat should receive the resumed agent turn, and the agent should inspect the same tab before continuing.
 
 ## Limits
 

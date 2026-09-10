@@ -7,10 +7,49 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-const { clickCoordsViaPlaywright, dragCoordsViaPlaywright, typeViaPlaywright } =
-  await import("./pw-tools-core.interactions.actions.js");
+const {
+  clickCoordsViaPlaywright,
+  dragCoordsViaPlaywright,
+  scrollCoordsViaPlaywright,
+  typeViaPlaywright,
+} = await import("./pw-tools-core.interactions.actions.js");
 
 describe("human input authority", () => {
+  it.each(["page", "move"])("fences scrolling revoked during %s", async (stage) => {
+    let current = true;
+    const mouse = {
+      move: vi.fn(async () => {
+        current = false;
+      }),
+      wheel: vi.fn(),
+    };
+    const page = { url: () => "https://example.test", mouse };
+    setPwToolsCoreCurrentPage(page);
+    if (stage === "page") {
+      getPwToolsCoreSessionMocks().getPageForTargetId.mockImplementationOnce(async () => {
+        current = false;
+        return page;
+      });
+    }
+    await expect(
+      scrollCoordsViaPlaywright({
+        cdpUrl: "http://localhost:18792",
+        targetId: "T1",
+        x: 1,
+        y: 2,
+        deltaX: 0,
+        deltaY: 200,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("requester revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("requester revoked");
+    expect(mouse.move).toHaveBeenCalledTimes(stage === "page" ? 0 : 1);
+    expect(mouse.wheel).not.toHaveBeenCalled();
+  });
+
   it("inserts chunks, preserves default fill, and rechecks authority after page resolution", async () => {
     const fill = vi.fn();
     const insertText = vi.fn();
