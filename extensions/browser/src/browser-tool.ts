@@ -43,7 +43,27 @@ import {
   untrackSessionBrowserTab,
 } from "./browser-tool.runtime.js";
 import type { BrowserScreenshotOptions } from "./browser-tool.screenshot.js";
+import { resolveTargetIdFromTabs } from "./browser/target-id.js";
 import { humanInterventionHandoffOwner } from "./human-intervention/constants.js";
+
+export type HumanInterventionToolCallbacks = {
+  request: (input: {
+    profile: string;
+    targetId: string;
+    reason: string;
+    resolveTab: () => Promise<{ targetId: string; hostname: string }>;
+  }) => Promise<{
+    record: { id: string; state: string; hostname: string; browser: { targetId: string } };
+    launchUrl: string;
+  }>;
+  waitForHuman: (input: {
+    id: string;
+    launchUrl: string;
+    hostname: string;
+    reason: string;
+    handoffOwner: string;
+  }) => Promise<void>;
+};
 
 type BrowserTabIdentity = { targetId: string; profile: string } & (
   | { target: "host" }
@@ -224,21 +244,7 @@ export function createBrowserTool(
         targetId: string;
       }) => Promise<() => Promise<void>>;
     };
-    humanIntervention?: {
-      request: (input: {
-        profile: string;
-        targetId: string;
-        reason: string;
-        resolveHostname: () => Promise<string>;
-      }) => Promise<{ record: { id: string; state: string; hostname: string }; launchUrl: string }>;
-      waitForHuman: (input: {
-        id: string;
-        launchUrl: string;
-        hostname: string;
-        reason: string;
-        handoffOwner: string;
-      }) => Promise<void>;
-    };
+    humanIntervention?: HumanInterventionToolCallbacks;
   },
 ): AnyAgentTool {
   const bindingResult =
@@ -425,20 +431,25 @@ export function createBrowserTool(
           profile: effectiveProfile,
           targetId,
           reason,
-          resolveHostname: async () => {
+          resolveTab: async () => {
             const tabs = await browserTabs(baseUrl, {
               profile: effectiveProfile,
               timeoutMs: toolTimeoutMs,
               signal,
             });
-            const tab = tabs.tabs.find(
-              (candidate) => readStringValue(candidate.targetId) === targetId,
-            );
+            const resolved = resolveTargetIdFromTabs(targetId, tabs.tabs);
+            if (!resolved.ok) {
+              throw new Error(`Browser tab ${resolved.reason} for human handoff: ${targetId}`);
+            }
+            const tab = tabs.tabs.find((candidate) => candidate.targetId === resolved.targetId);
             if (!tab) {
               throw new Error(`Browser tab not found for human handoff: ${targetId}`);
             }
             const url = readStringValue(tab.url);
-            return url ? URL.parse(url)?.hostname || "this site" : "this site";
+            return {
+              targetId: resolved.targetId,
+              hostname: url ? URL.parse(url)?.hostname || "this site" : "this site",
+            };
           },
         });
         const hostname = handoff.record.hostname;
@@ -456,7 +467,7 @@ export function createBrowserTool(
           state: handoff.record.state,
           launchUrl: handoff.launchUrl,
           profile: effectiveProfile,
-          targetId,
+          targetId: handoff.record.browser.targetId,
         });
       }
       const nodeRoute = nodeTarget ? createBrowserNodeSessionTabRoute(nodeTarget) : undefined;

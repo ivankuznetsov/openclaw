@@ -402,10 +402,17 @@ export function registerBrowserAgentActRoutes(
   app.post("/act", async (req, res) => {
     const body = readBody(req);
     const controlAuthoritySignal = readBrowserControlAuthoritySignal(body);
+    const authoritySignals = [req.signal, req.requester?.signal, controlAuthoritySignal].filter(
+      (signal): signal is AbortSignal => signal !== undefined,
+    );
     const authorityBoundSignal =
-      req.signal && controlAuthoritySignal
-        ? AbortSignal.any([req.signal, controlAuthoritySignal])
-        : (req.signal ?? controlAuthoritySignal);
+      authoritySignals.length > 1 ? AbortSignal.any(authoritySignals) : authoritySignals[0];
+    const assertCurrent = () => {
+      authorityBoundSignal?.throwIfAborted();
+      if (req.requester?.isCurrent() === false) {
+        throw new Error("Browser requester authority is no longer current");
+      }
+    };
     const kindRaw = toStringOrEmpty(body.kind);
     if (!isActKind(kindRaw)) {
       return jsonActError(res, 400, ACT_ERROR_CODES.kindRequired, "kind is required");
@@ -542,6 +549,7 @@ export function registerBrowserAgentActRoutes(
               let actionError: unknown;
               let result: T | undefined;
               try {
+                assertCurrent();
                 result = await execute();
               } catch (error) {
                 actionError = error;
@@ -705,6 +713,7 @@ export function registerBrowserAgentActRoutes(
           if (!pw) {
             return;
           }
+          assertCurrent();
           const result = await pw.executeActViaPlaywright({
             cdpUrl,
             action,
@@ -712,6 +721,7 @@ export function registerBrowserAgentActRoutes(
             evaluateEnabled,
             ...navigationPolicy,
             signal,
+            assertCurrent,
           });
           const resultTargetOptions = {
             resolveCurrentTarget: true,

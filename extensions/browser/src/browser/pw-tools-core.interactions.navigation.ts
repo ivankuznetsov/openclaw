@@ -27,7 +27,10 @@ export type InteractionTargetOptions = {
 };
 
 export type NavigationTargetOptions = InteractionTargetOptions & BrowserNavigationPolicyOptions;
-export type GuardedInteractionOptions = NavigationTargetOptions & { signal?: AbortSignal };
+export type GuardedInteractionOptions = NavigationTargetOptions & {
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
+};
 export type ElementInteractionOptions = GuardedInteractionOptions & {
   ref?: string;
   selector?: string;
@@ -116,7 +119,10 @@ export async function runCancellablePageInteraction<T>(
   try {
     const result = await awaitNavigationGuardedInteraction(
       {
-        action: () => action(cancellation.signal),
+        action: () => {
+          opts.assertCurrent?.();
+          return action(cancellation.signal);
+        },
         cdpUrl: opts.cdpUrl,
         page,
         ...interactionNavigationPolicy(opts),

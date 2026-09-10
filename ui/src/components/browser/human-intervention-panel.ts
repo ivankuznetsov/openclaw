@@ -6,7 +6,6 @@ import type {
 } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerHumanInterventionEnglish } from "../../i18n/locales/en-human-intervention.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -16,13 +15,14 @@ import {
   BrowserScreencastClient,
   type BrowserScreencastFrame,
 } from "./browser-screencast-client.ts";
+import type { HumanInterventionClient } from "./handoff-http-client.ts";
 import { humanInterventionStyles } from "./human-intervention-panel.styles.ts";
 
 registerHumanInterventionEnglish();
 
 type ScreencastResponse = { wsPath: string };
 
-type ViewerConnection = { client: GatewayBrowserClient; id: string };
+type ViewerConnection = { client: HumanInterventionClient; id: string };
 type ControlSession = {
   connection: ViewerConnection;
   controllerId: string;
@@ -53,9 +53,10 @@ export function resolveHumanBrowserPoint(
 }
 
 export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
-  @property({ attribute: false }) client: GatewayBrowserClient | null = null;
+  @property({ attribute: false }) client: HumanInterventionClient | null = null;
   @property({ type: Boolean }) available = false;
   @property() handoffId = "";
+  @property({ type: Boolean }) autoClaim = false;
   @property({ attribute: false }) onDocumentClose?: () => void;
 
   @state() private handoff: HumanInterventionView | null = null;
@@ -150,6 +151,10 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
       });
       if (this.isCurrent(connection)) {
         this.handoff = response.handoff;
+        if (this.autoClaim && ["waiting", "control"].includes(response.handoff.state)) {
+          this.autoClaim = false;
+          await this.claim();
+        }
       }
     } catch (error) {
       if (this.isCurrent(connection)) {
@@ -676,6 +681,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
                 </button>
               </div>`
             : html`<div class="actions">
+                ${this.handoff.state === "resume_pending" ? html`<button data-refresh-status @click=${() => this.retry()}>${t("humanBrowser.refreshStatus")}</button>` : nothing}
                 <button @click=${() => this.onDocumentClose?.()}>${t("common.close")}</button>
               </div>`
         }

@@ -14,9 +14,10 @@ export async function handleBrowserScreencastUpgrade(
   req: IncomingMessage,
   socket: Duplex,
   head: Buffer,
+  routePath = "/browser/screencast",
 ): Promise<boolean> {
   const url = new URL(req.url ?? "/", "http://127.0.0.1");
-  if (url.pathname !== "/browser/screencast") {
+  if (url.pathname !== routePath) {
     return false;
   }
   const params = consumeBrowserScreencastToken(url.searchParams.get("token") ?? "");

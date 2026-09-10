@@ -8,7 +8,7 @@ title: "Human Browser Intervention"
 
 # Human browser intervention
 
-Human browser intervention lets an agent pause a managed browser profile and send an **Open browser** link to the current direct chat. The link opens the exact remote tab in an authenticated, mobile-friendly Control UI page. The human performs the blocked step and selects **Done — continue agent**; OpenClaw then schedules a fresh turn in the original session and delivery route.
+Human browser intervention lets an agent pause a managed browser profile and send an **Open browser** link to the current direct chat. The link opens the exact remote tab in a mobile-friendly page using a temporary credential limited to that handoff. The human performs the blocked step and selects **Done — continue agent**; OpenClaw then schedules a fresh turn in the original session and delivery route.
 
 This is a manual-control path. OpenClaw does not solve or relay CAPTCHA answers through the model.
 
@@ -25,6 +25,9 @@ The phone must be able to reach the same HTTPS Gateway origin used by the Contro
       // basePath: "/openclaw", // optional reverse-proxy path
     },
   },
+  tools: {
+    alsoAllow: ["browser"],
+  },
   browser: {
     humanIntervention: {
       enabled: true,
@@ -35,38 +38,42 @@ The phone must be able to reach the same HTTPS Gateway origin used by the Contro
 
 `gateway.publicOrigin` must use HTTPS for handoff links. A loopback URL cannot reach a browser on another machine. If you use a private VPN, its HTTPS hostname is valid as long as the phone can resolve and reach it.
 
-Sign in to the Control UI from the phone once before relying on handoffs. Both viewing and controlling a handoff require an authenticated Gateway administrator (`operator.admin`). The handoff ID in the chat link is not a credential.
+The agent must also have access to the `browser` tool. The `coding` tool profile does not include it; add `browser` to the existing `tools.alsoAllow` list, preserving any other entries. Explicit deny rules still apply. See [Browser tool access](/tools/browser).
 
-This follows the Gateway's single operator trust boundary: administrators share handoff access. The originating chat sender is recorded as provenance, but is not mapped to a separate web identity. Use separate Gateways for owners who must not access each other's browser sessions.
+The chat link includes a one-use credential that expires after 10 minutes, or when the handoff expires, whichever comes first. Select **Take control** to redeem it. No Gateway token, administrator pairing, or server command is required. Link previews do not redeem the credential.
+
+Treat the link as private: anyone who receives an unused link can redeem it. The resulting browser session can view and operate only the selected handoff until it ends or expires. It cannot access Gateway settings, chats, shell commands, or other tabs. The credential is kept in this browser tab's session storage; it is not added to the normal Gateway login store. Gateway administrators retain their existing access through the authenticated Control UI.
 
 ## Use it
 
-When a managed browser tab reaches a live human-verification step, the browser tool can request a handoff. OpenClaw:
+When the agent encounters a CAPTCHA, login/2FA, or another step only you can complete in a managed browser tab, it should request a handoff immediately. You do not need to ask for a link first. This is an agent tool decision based on the visible page, not a background CAPTCHA detector. OpenClaw:
 
 1. Waits for active managed-browser work on that profile to finish.
 2. Reserves the profile and blocks new participating agent browser operations.
 3. Sends the site hostname, short reason, and HTTPS link to the originating direct chat.
 4. Keeps the browser process, profile, and tab alive while the task is paused.
 
-Open the link and select **Take control**. The page supports taps, drags, page scrolling, local zoom, keyboard keys, and text entry into the focused remote field. It does not expose navigation, evaluation, cookies, files, shell access, or other browser profiles.
+Open the link and select **Take control**. The page supports taps, drags, page scrolling, local zoom, keyboard keys, and text entry into the focused remote field. It does not expose browser navigation commands, evaluation, cookies, files, shell access, or other browser profiles. Clicking links or typing into the page can still navigate within the selected tab; access is scoped to the tab, not to one website.
 
 - **Done — continue agent** revokes human input and schedules the original session to inspect fresh page state before continuing.
 - **Leave paused** releases the controller while preserving the handoff and browser reservation.
 - **Cancel handoff** ends the handoff without resuming the task.
 
-Closing or backgrounding the page leaves the task paused. A controller lease also expires after a disconnect, allowing the same or another authenticated owner device to claim it later. Handoffs expire after 30 minutes by default.
+Closing or backgrounding the page leaves the task paused. A controller lease also expires after a disconnect. Return to the same browser tab to take control again. An already-redeemed link cannot be used to authorize another browser; if you close the tab and lose its session storage, request a new handoff or use an authenticated administrator viewer. Handoffs expire after 30 minutes by default.
 
-After completion, **waiting to be queued** means continuation admission is still pending. **Queued to continue** means the Gateway has durably accepted the continuation; it does not mean the agent has already started or finished. Watch the originating chat for the task result.
+After completion, **waiting to be queued** means continuation admission is still pending. **Queued to continue** means the Gateway has durably accepted the continuation; it does not mean the agent has already started or finished. Select **Refresh status** while admission is pending to check whether it has been queued, and watch the originating chat for the task result.
 
 ## Chat support
 
-Telegram, iMessage, and WhatsApp use the same portable HTTPS text link and lifecycle. The mechanism uses OpenClaw's current delivery context, so completion returns to the same channel, account, conversation, and thread when applicable. Handoff creation is limited to owner-authorized direct conversations; group and channel sessions do not receive browser links.
+Supported direct-delivery channels, including Telegram and iMessage, use the same portable HTTPS text link and lifecycle. Handoff requires a current-turn delivery capability; channels using Gateway-owned delivery, including WhatsApp, do not currently expose it. The mechanism uses OpenClaw's current delivery context, so completion returns to the same channel, account, conversation, and thread when applicable. Handoff creation is limited to owner-authorized direct conversations; group and channel sessions do not receive browser links.
 
-Native iOS and Android presentation can use the same focus URL and Gateway methods. A dedicated in-app card or embedded native viewer is separate client work; the shared web page remains the baseline mobile flow.
+Native iOS and Android users can open the same link in their mobile browser. A dedicated in-app card or embedded native viewer is separate client work; the shared web page remains the baseline mobile flow.
 
 ## Test it
 
-Start with a harmless form page that does not require credentials. In an owner-authorized direct chat, ask the agent to open the page in a managed browser profile and request human help before submitting it. Open the handoff link from another device, select **Take control**, enter a non-sensitive test value, and select **Done — continue agent**. The original chat should receive the resumed agent turn, and the agent should inspect the same tab before continuing.
+To test automatic handoff, give the agent a normal browser task whose page requires a human-only step, without mentioning handoff in your request. It should send the link and pause on that step.
+
+For a basic control test, start with a harmless form page that does not require credentials. In an owner-authorized direct chat, ask the agent to open the page in a managed browser profile and request human help before submitting it. Open the handoff link from another device, select **Take control**, enter a non-sensitive test value, and select **Done — continue agent**. The original chat should receive the resumed agent turn, and the agent should inspect the same tab before continuing.
 
 ## Limits
 
@@ -75,4 +82,4 @@ Start with a harmless form page that does not require credentials. In an owner-a
 - Native browser dialogs, audio-only challenges, and a verification flow that switches to an unbound popup may require a different supported surface.
 - The Gateway must remain running and the remote browser tab must remain alive.
 
-If no handoff link appears, verify `browser.humanIntervention.enabled`, `gateway.publicOrigin`, direct-chat owner authorization, and managed-profile selection. If the page opens at the sign-in screen, authenticate that mobile browser to the Gateway and reopen the link.
+If no handoff link appears, verify browser-tool access, `browser.humanIntervention.enabled`, `gateway.publicOrigin`, direct-chat owner authorization, and managed-profile selection. If the page opens at the sign-in screen, reopen the complete new link from the chat; older links without a handoff credential still use the administrator sign-in flow. If the link has expired or was already used in another browser, ask for a new handoff.

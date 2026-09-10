@@ -1,16 +1,17 @@
 import type { PropertyValues } from "lit";
 import { property, query, state } from "lit/decorators.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../api/gateway.ts";
-import "../components/app-topbar.ts";
-import "../components/modal-dialog.ts";
 import {
   formatDocumentTitle,
   isSettingsNavigationRoute,
   titleForRoute,
 } from "../app-navigation.ts";
-import "../components/resizable-divider.ts";
+import "../components/app-topbar.ts";
+import "../components/modal-dialog.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
+import "../components/resizable-divider.ts";
 import { APP_ROUTE_IDS, type RouteId } from "../app-routes.ts";
+import { captureHandoffAccess } from "../components/browser/handoff-access.ts";
 import type {
   CommandPaletteElement,
   CommandPaletteTargetDetail,
@@ -726,7 +727,33 @@ class OpenClawShell
   }
 }
 if (!customElements.get("openclaw-app")) {
-  customElements.define("openclaw-app", OpenClawApp);
+  const access = captureHandoffAccess();
+  if (access) {
+    // Scoped handoffs must never bootstrap the administrative Gateway client.
+    customElements.define(
+      "openclaw-app",
+      class extends HTMLElement {
+        connectedCallback() {
+          void import("../components/browser/handoff-link-page.ts")
+            .then(({ mountHandoffLinkPage }) => {
+              if (this.isConnected) {
+                mountHandoffLinkPage(this, access);
+              }
+            })
+            .catch(() => {
+              this.textContent = `${t("lazyView.errorTitle")}. ${t("lazyView.genericSubtitle")}`;
+              const reload = document.createElement("button");
+              reload.textContent = t("common.reload");
+              reload.addEventListener("click", () => location.reload());
+              this.append(reload);
+              window.dispatchEvent(new Event("openclaw-control-ui-rendered"));
+            });
+        }
+      },
+    );
+  } else {
+    customElements.define("openclaw-app", OpenClawApp);
+  }
 }
 if (!customElements.get("openclaw-app-shell")) {
   customElements.define("openclaw-app-shell", OpenClawShell);

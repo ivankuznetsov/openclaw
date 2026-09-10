@@ -37,7 +37,7 @@ function requireHandoffString(params: Record<string, unknown>, key: string): str
   return value;
 }
 
-function readGeneration(params: Record<string, unknown>): number {
+export function readGeneration(params: Record<string, unknown>): number {
   const value = params.generation;
   if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
     throw new Error("generation must be a positive integer");
@@ -53,7 +53,7 @@ function readControlRequest(params: Record<string, unknown>): HumanInterventionC
   };
 }
 
-function present(record: HumanInterventionRecord): HumanInterventionView {
+export function present(record: HumanInterventionRecord): HumanInterventionView {
   return {
     id: record.id,
     state: record.state,
@@ -69,7 +69,7 @@ function present(record: HumanInterventionRecord): HumanInterventionView {
   };
 }
 
-function sanitizeAction(value: unknown, targetId: string): Record<string, unknown> {
+export function sanitizeAction(value: unknown, targetId: string): Record<string, unknown> {
   const action = asNullableRecord(value);
   if (!action) {
     throw new Error("action is required");

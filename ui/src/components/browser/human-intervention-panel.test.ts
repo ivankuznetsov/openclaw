@@ -105,6 +105,22 @@ describe("human browser intervention panel", () => {
     expect(panel.shadowRoot?.querySelector('[role="status"]')?.textContent).toContain(message);
   });
 
+  it("refreshes a pending continuation without reclaiming browser control", async () => {
+    const { client, request } = createClient();
+    request.mockResolvedValueOnce(handoff("resume_pending", 3));
+    const panel = await mountPanel(client);
+    request.mockResolvedValueOnce(handoff("resumed", 3));
+    const refresh = panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-refresh-status]");
+    expect(refresh).not.toBeNull();
+    refresh!.click();
+    await waitForFast(() => expect(panel.shadowRoot?.textContent).toContain("queued to continue"));
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "browser.handoff.get",
+      "browser.handoff.get",
+    ]);
+    expect(panel.shadowRoot?.querySelector("[data-refresh-status]")).toBeNull();
+  });
+
   it("does not acquire local control when another device rejects the claim", async () => {
     const { client, request } = createClient();
     request.mockResolvedValueOnce(handoff("control", 2));

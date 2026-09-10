@@ -8,6 +8,7 @@ import {
   HumanInterventionService,
   type HumanInterventionBrowser,
   type HumanInterventionRecord,
+  type MutationAuthorityGuard,
 } from "./service.js";
 
 type ScheduleContinuation = OpenClawPluginApi["session"]["workflow"]["scheduleSessionTurn"];
@@ -32,7 +33,7 @@ export type HumanInterventionRequestInput = {
   targetId: string;
   reason: string;
   hostname?: string;
-  resolveHostname?: () => Promise<string>;
+  resolveTab?: () => Promise<{ targetId: string; hostname: string }>;
 };
 
 export type HumanInterventionRequestResult = {
@@ -45,6 +46,11 @@ function normalizeBasePath(value: string | undefined): string {
   return trimmed ? `/${trimmed}` : "";
 }
 
+/** Public prefix shared by the viewer, capability endpoint, and screencast route. */
+export function resolveHumanInterventionBasePath(publicUrl: string, basePath?: string): string {
+  return `${URL.parse(publicUrl)?.pathname.replace(/\/+$/u, "") ?? ""}${normalizeBasePath(basePath)}`;
+}
+
 function normalizeBoundedText(value: string, fallback: string, maxLength: number): string {
   const normalized = value.trim().replace(/\s+/gu, " ");
   return (normalized || fallback).slice(0, maxLength);
@@ -54,14 +60,15 @@ function buildHumanInterventionLaunchUrl(params: {
   publicUrl: string;
   basePath?: string;
   id: string;
+  token: string;
 }): string {
   const publicUrl = new URL(params.publicUrl);
   if (publicUrl.protocol !== "https:") {
     throw new Error("gateway.publicOrigin must use HTTPS for human browser handoff");
   }
-  publicUrl.pathname = `${publicUrl.pathname.replace(/\/+$/u, "")}${normalizeBasePath(params.basePath)}/focus/browser/${encodeURIComponent(params.id)}`;
+  publicUrl.pathname = `${resolveHumanInterventionBasePath(params.publicUrl, params.basePath)}/focus/browser/${encodeURIComponent(params.id)}`;
   publicUrl.search = "";
-  publicUrl.hash = "";
+  publicUrl.hash = new URLSearchParams({ handoffToken: params.token }).toString();
   return publicUrl.toString();
 }
 
@@ -99,7 +106,8 @@ export class HumanInterventionCoordinator {
     const accountId = context.deliveryContext?.accountId ?? context.agentAccountId ?? "default";
     const browser = { target: "host", profile: input.profile, targetId: input.targetId } as const;
     const record = await this.profileGate.reserve(browser, async () => {
-      const hostname = input.resolveHostname ? await input.resolveHostname() : input.hostname;
+      const tab = await input.resolveTab?.();
+      const hostname = tab?.hostname ?? input.hostname;
       return await this.service.request({
         agentId,
         sessionKey,
@@ -112,7 +120,7 @@ export class HumanInterventionCoordinator {
             ? { threadId: String(context.deliveryContext.threadId) }
             : {}),
         },
-        browser,
+        browser: { ...browser, targetId: tab?.targetId ?? input.targetId },
         reason: normalizeBoundedText(input.reason, "Human verification required", 240),
         hostname: normalizeBoundedText(hostname ?? "", "this site", 253),
       });
@@ -124,7 +132,13 @@ export class HumanInterventionCoordinator {
     const basePath =
       typeof this.options.basePath === "function" ? this.options.basePath() : this.options.basePath;
     try {
-      const launchUrl = buildHumanInterventionLaunchUrl({ publicUrl, basePath, id: record.id });
+      const { token } = await this.service.issueViewerLink(record.id);
+      const launchUrl = buildHumanInterventionLaunchUrl({
+        publicUrl,
+        basePath,
+        id: record.id,
+        token,
+      });
       return { record, launchUrl };
     } catch (error) {
       await this.service.cancel(record.id);
@@ -132,13 +146,13 @@ export class HumanInterventionCoordinator {
     }
   }
 
-  async get(id: string): Promise<HumanInterventionRecord> {
-    return await this.service.get(id);
+  async get(id: string, guard?: MutationAuthorityGuard): Promise<HumanInterventionRecord> {
+    return await this.service.get(id, guard);
   }
 
   async claim(
     input: { id: string; controllerId: string },
-    assertCurrentAuthority?: () => void,
+    assertCurrentAuthority?: MutationAuthorityGuard,
   ): Promise<HumanInterventionRecord> {
     return await this.runExclusive(input.id, async () => {
       const record = await this.service.claim(input, assertCurrentAuthority);
@@ -149,7 +163,7 @@ export class HumanInterventionCoordinator {
 
   async renew(
     input: HumanInterventionControlRequest,
-    assertCurrentAuthority?: () => void,
+    assertCurrentAuthority?: MutationAuthorityGuard,
   ): Promise<HumanInterventionRecord> {
     return await this.runExclusive(input.id, async () => {
       const record = await this.service.renew(input, assertCurrentAuthority);
@@ -161,16 +175,17 @@ export class HumanInterventionCoordinator {
   async runBrowserOperation<T>(
     input: HumanInterventionControlRequest,
     operation: (record: HumanInterventionRecord, authoritySignal: AbortSignal) => Promise<T>,
+    assertCurrentAuthority?: MutationAuthorityGuard,
   ): Promise<T> {
     return await this.runExclusive(input.id, async () => {
-      const record = await this.service.authorizeControl(input);
+      const record = await this.service.authorizeControl(input, assertCurrentAuthority);
       return await operation(record, this.syncControlAuthority(record));
     });
   }
 
   async leave(
     input: HumanInterventionControlRequest,
-    assertCurrentAuthority?: () => void,
+    assertCurrentAuthority?: MutationAuthorityGuard,
   ): Promise<HumanInterventionRecord> {
     return await this.runExclusive(input.id, async () => {
       const record = await this.service.leave(input, assertCurrentAuthority);
@@ -179,7 +194,10 @@ export class HumanInterventionCoordinator {
     });
   }
 
-  async cancel(id: string, assertCurrentAuthority?: () => void): Promise<HumanInterventionRecord> {
+  async cancel(
+    id: string,
+    assertCurrentAuthority?: MutationAuthorityGuard,
+  ): Promise<HumanInterventionRecord> {
     return await this.runExclusive(id, async () => {
       const record = await this.service.cancel(id, assertCurrentAuthority);
       this.revokeControlAuthority(id);
@@ -189,7 +207,7 @@ export class HumanInterventionCoordinator {
 
   async complete(
     input: HumanInterventionControlRequest,
-    assertCurrentAuthority?: () => void,
+    assertCurrentAuthority?: MutationAuthorityGuard,
   ): Promise<HumanInterventionRecord> {
     const completed = await this.runExclusive(input.id, async () => {
       const record = await this.service.complete(input, assertCurrentAuthority);

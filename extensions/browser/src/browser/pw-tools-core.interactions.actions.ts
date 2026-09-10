@@ -69,8 +69,10 @@ export async function clickViaPlaywright(
       if (delayMs > 0) {
         await locator.hover({ timeout, signal });
         throwIfInteractionAborted(opts.signal);
+        opts.assertCurrent?.();
         await sleepWithAbort(delayMs, opts.signal);
         throwIfInteractionAborted(opts.signal);
+        opts.assertCurrent?.();
       }
       const clickOptions = { timeout, signal, button: opts.button, modifiers: opts.modifiers };
       await (opts.doubleClick ? locator.dblclick(clickOptions) : locator.click(clickOptions));
@@ -109,8 +111,12 @@ export async function dragCoordsViaPlaywright(
   const page = await getRestoredPageForTarget(opts);
   await runGuardedPageInteraction(page, opts, async () => {
     await page.mouse.move(opts.x, opts.y);
+    throwIfInteractionAborted(opts.signal);
+    opts.assertCurrent?.();
     await page.mouse.down();
     try {
+      throwIfInteractionAborted(opts.signal);
+      opts.assertCurrent?.();
       await page.mouse.move(opts.endX, opts.endY, { steps: 8 });
     } finally {
       await page.mouse.up();
@@ -129,7 +135,10 @@ async function runGuardedPageInteraction<T>(
   try {
     return await awaitNavigationGuardedInteraction(
       {
-        action,
+        action: () => {
+          opts.assertCurrent?.();
+          return action();
+        },
         cdpUrl: opts.cdpUrl,
         page,
         ...interactionNavigationPolicy(opts),
@@ -257,12 +266,14 @@ export async function typeViaPlaywright(
       if (opts.slowly) {
         await locator.click({ timeout, signal });
         throwIfInteractionAborted(opts.signal);
+        opts.assertCurrent?.();
         await locator.type(text, { timeout, signal, delay: 75 });
       } else {
         await locator.fill(text, { timeout, signal });
       }
       if (opts.submit) {
         throwIfInteractionAborted(opts.signal);
+        opts.assertCurrent?.();
         await locator.press("Enter", { timeout, signal });
       }
     },

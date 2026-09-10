@@ -173,6 +173,46 @@ describe("existing-session interaction navigation guard", () => {
     expect(call?.signal?.aborted).toBe(true);
   });
 
+  it("binds input to requester disconnect independently of request timeout", async () => {
+    const connection = new AbortController();
+    const timeout = new AbortController();
+    const handler = getActPostHandler(null);
+    const response = createBrowserRouteResponse();
+    await handler?.(
+      {
+        params: {},
+        query: {},
+        body: { kind: "clickCoords", x: 1, y: 2 },
+        signal: timeout.signal,
+        requester: { signal: connection.signal, isCurrent: () => true },
+      },
+      response.res,
+    );
+    const call = chromeMcpMocks.clickChromeMcpCoords.mock.calls[0]?.[0] as { signal: AbortSignal };
+    connection.abort();
+    expect(timeout.signal.aborted).toBe(false);
+    expect(call.signal.aborted).toBe(true);
+  });
+
+  it("rejects a revoked requester even before its socket closes", async () => {
+    const connection = new AbortController();
+    const handler = getActPostHandler(null);
+    const response = createBrowserRouteResponse();
+    await expect(
+      handler?.(
+        {
+          params: {},
+          query: {},
+          body: { kind: "clickCoords", x: 1, y: 2 },
+          requester: { signal: connection.signal, isCurrent: () => false },
+        },
+        response.res,
+      ),
+    ).rejects.toThrow("requester authority");
+    expect(connection.signal.aborted).toBe(false);
+    expect(chromeMcpMocks.clickChromeMcpCoords).not.toHaveBeenCalled();
+  });
+
   function expectNavigationProbeUrls(urls: string[]) {
     expect(navigationGuardMocks.assertBrowserNavigationResultAllowed).toHaveBeenCalledTimes(
       urls.length,

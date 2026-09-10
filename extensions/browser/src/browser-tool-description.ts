@@ -57,7 +57,7 @@ export function describeBrowserTool(opts: {
       : []),
     ...(actions.has("handoff")
       ? [
-          "When a site requires live human verification, use action=handoff with the exact targetId and a short reason. This pauses managed automation, sends the owner a mobile link, and ends the current turn; never solve the challenge yourself.",
+          "When the page blocks your task on a CAPTCHA, human verification, login/2FA, or another step only the user can complete, immediately call action=handoff with target=host, the current profile, targetId, and a short reason. Do not wait for the user to request handoff or ask whether they want a link. This sends a private, handoff-only mobile link, pauses automation, and ends the turn. Never solve or bypass a CAPTCHA yourself, request credentials in chat, or ask for host Chrome/KVM access. After the user completes the handoff, inspect fresh page state before continuing.",
         ]
       : []),
     ...(!opts.capabilities.tabBound

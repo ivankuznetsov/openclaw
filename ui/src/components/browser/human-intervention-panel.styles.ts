@@ -68,7 +68,6 @@ export const humanInterventionStyles = css`
     display: block;
     width: calc(100% * var(--human-browser-zoom));
     height: auto;
-    min-height: 240px;
     object-fit: contain;
     object-position: top left;
     user-select: none;

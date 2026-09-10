@@ -53,10 +53,13 @@ async function executeSingleAction(
   navigationPolicy: BrowserNavigationPolicyOptions = {},
   depth = 0,
   signal?: AbortSignal,
+  assertCurrent?: () => void,
 ): Promise<unknown> {
   if (depth > ACT_MAX_BATCH_DEPTH) {
     throw new Error(`Batch nesting depth exceeds maximum of ${ACT_MAX_BATCH_DEPTH}`);
   }
+  signal?.throwIfAborted();
+  assertCurrent?.();
   const effectiveTargetId = action.targetId ?? targetId;
   switch (action.kind) {
     case "click":
@@ -74,6 +77,7 @@ async function executeSingleAction(
         timeoutMs: action.timeoutMs,
         ...navigationPolicy,
         signal,
+        assertCurrent,
       });
       break;
     case "clickCoords":
@@ -87,6 +91,7 @@ async function executeSingleAction(
         delayMs: action.delayMs,
         ...navigationPolicy,
         signal,
+        assertCurrent,
       });
       break;
     case "dragCoords":
@@ -99,6 +104,7 @@ async function executeSingleAction(
         endY: action.endY,
         ...navigationPolicy,
         signal,
+        assertCurrent,
       });
       break;
     case "type":
@@ -113,6 +119,7 @@ async function executeSingleAction(
         timeoutMs: action.timeoutMs,
         ...navigationPolicy,
         signal,
+        assertCurrent,
       });
       break;
     case "press":
@@ -123,6 +130,7 @@ async function executeSingleAction(
         delayMs: action.delayMs,
         ...navigationPolicy,
         signal,
+        assertCurrent,
       });
       break;
     case "hover":
@@ -134,6 +142,7 @@ async function executeSingleAction(
         timeoutMs: action.timeoutMs,
         ...navigationPolicy,
         signal,
+        assertCurrent,
       });
       break;
     case "scrollIntoView":
@@ -145,6 +154,7 @@ async function executeSingleAction(
         timeoutMs: action.timeoutMs,
         ...navigationPolicy,
         signal,
+        assertCurrent,
       });
       break;
     case "drag":
@@ -158,6 +168,7 @@ async function executeSingleAction(
         timeoutMs: action.timeoutMs,
         ...navigationPolicy,
         signal,
+        assertCurrent,
       });
       break;
     case "select":
@@ -170,6 +181,7 @@ async function executeSingleAction(
         timeoutMs: action.timeoutMs,
         ...navigationPolicy,
         signal,
+        assertCurrent,
       });
       break;
     case "fill":
@@ -180,6 +192,7 @@ async function executeSingleAction(
         timeoutMs: action.timeoutMs,
         ...navigationPolicy,
         signal,
+        assertCurrent,
       });
       break;
     case "resize":
@@ -208,6 +221,7 @@ async function executeSingleAction(
         timeoutMs: action.timeoutMs,
         ...navigationPolicy,
         signal,
+        assertCurrent,
       });
       break;
     case "evaluate":
@@ -222,6 +236,7 @@ async function executeSingleAction(
         ref: action.ref,
         timeoutMs: action.timeoutMs,
         signal,
+        assertCurrent,
       });
     case "close":
       await closePageViaPlaywright({
@@ -239,6 +254,7 @@ async function executeSingleAction(
         evaluateEnabled,
         depth: depth + 1,
         signal,
+        assertCurrent,
       });
       // A nested batch is one parent action; surface its first failure so each
       // level applies its own stopOnError without discarding the child outcome.
@@ -335,6 +351,7 @@ export async function executeActViaPlaywright(
         stopOnError: opts.action.stopOnError,
         evaluateEnabled: opts.evaluateEnabled,
         signal: dialogAbort.signal,
+        assertCurrent: opts.assertCurrent,
       });
       const newDownloads = await drainDownloads();
       return await withOperationTarget({
@@ -351,6 +368,7 @@ export async function executeActViaPlaywright(
       navigationPolicy,
       0,
       dialogAbort.signal,
+      opts.assertCurrent,
     );
     const newDownloads = await drainDownloads();
     if (opts.action.kind === "evaluate") {
@@ -467,6 +485,7 @@ export async function batchViaPlaywright(
           navigationPolicy,
           depth,
           opts.signal,
+          opts.assertCurrent,
         );
         result = { ok: true };
       } catch (err) {

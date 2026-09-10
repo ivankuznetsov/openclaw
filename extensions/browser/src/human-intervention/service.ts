@@ -1,3 +1,4 @@
+import { createHash, randomBytes } from "node:crypto";
 import type {
   HumanInterventionControlRequest,
   HumanInterventionState,
@@ -8,6 +9,7 @@ import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-run
 const DEFAULT_PENDING_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_CONTROL_LEASE_MS = 60 * 1000;
 const MAX_LOCATED_IDS = 1_000;
+const VIEWER_LINK_TTL_MS = 10 * 60 * 1000;
 
 type HumanInterventionOwner = {
   channel: string;
@@ -48,6 +50,12 @@ export type HumanInterventionRecord = {
   completedAtMs?: number;
   /** Durable queue-admission time; this does not record execution start. */
   resumedAtMs?: number;
+  viewerAccess?: {
+    linkTokenHash: string;
+    linkExpiresAtMs: number;
+    sessionTokenHash?: string;
+    controllerId?: string;
+  };
 };
 
 export type HumanInterventionRequest = Pick<
@@ -62,7 +70,14 @@ type ServiceOptions = {
   controlLeaseMs?: number;
 };
 
-type MutationAuthorityGuard = () => void;
+export type MutationAuthorityGuard = (current: HumanInterventionRecord, now: number) => void;
+
+function hashViewerSecret(token: string): string {
+  if (!/^[A-Za-z0-9_-]{43}$/u.test(token)) {
+    throw new HumanInterventionConflictError("Invalid human browser viewer authority");
+  }
+  return createHash("sha256").update(token).digest("hex");
+}
 
 class HumanInterventionError extends Error {}
 
@@ -167,8 +182,97 @@ export class HumanInterventionService {
     return record;
   }
 
-  async get(id: string): Promise<HumanInterventionRecord> {
-    return (await this.requireCurrentLocated(id)).record;
+  async get(id: string, guard?: MutationAuthorityGuard): Promise<HumanInterventionRecord> {
+    const record = (await this.requireCurrentLocated(id)).record;
+    guard?.(record, this.now());
+    return record;
+  }
+
+  async issueViewerLink(id: string): Promise<{ token: string; expiresAtMs: number }> {
+    const token = randomBytes(32).toString("base64url");
+    const record = await this.transitionById(id, (current, now) => {
+      if (
+        current.viewerAccess ||
+        current.expiresAtMs <= now ||
+        (current.state !== "waiting" && current.state !== "control")
+      ) {
+        throw new HumanInterventionConflictError("Cannot issue human browser viewer link");
+      }
+      return {
+        ...current,
+        viewerAccess: {
+          linkTokenHash: hashViewerSecret(token),
+          linkExpiresAtMs: Math.min(current.expiresAtMs, now + VIEWER_LINK_TTL_MS),
+        },
+      };
+    });
+    return { token, expiresAtMs: record.viewerAccess!.linkExpiresAtMs };
+  }
+
+  async redeemViewerLink(
+    id: string,
+    token: string,
+    sessionToken: string,
+    guard?: MutationAuthorityGuard,
+  ): Promise<{
+    controllerId: string;
+    expiresAtMs: number;
+  }> {
+    const linkTokenHash = hashViewerSecret(token);
+    const sessionTokenHash = hashViewerSecret(sessionToken);
+    const record = await this.transitionById(
+      id,
+      (current, now) => {
+        const access = current.viewerAccess;
+        if (
+          !access ||
+          access.sessionTokenHash ||
+          access.linkTokenHash !== linkTokenHash ||
+          access.linkExpiresAtMs <= now ||
+          current.expiresAtMs <= now ||
+          (current.state !== "waiting" && current.state !== "control")
+        ) {
+          throw new HumanInterventionConflictError("Invalid or expired human browser viewer link");
+        }
+        return {
+          ...current,
+          viewerAccess: {
+            ...access,
+            linkTokenHash: "",
+            sessionTokenHash,
+            controllerId: randomBytes(32).toString("base64url"),
+          },
+        };
+      },
+      guard,
+    );
+    return { controllerId: record.viewerAccess!.controllerId!, expiresAtMs: record.expiresAtMs };
+  }
+
+  async viewerAuthority(
+    id: string,
+    sessionToken: string,
+    allowTerminalRead = false,
+  ): Promise<{
+    controllerId: string;
+    assertCurrent: MutationAuthorityGuard;
+  }> {
+    const hash = hashViewerSecret(sessionToken);
+    const assertCurrent: MutationAuthorityGuard = (current, now) => {
+      if (
+        current.id !== id ||
+        current.viewerAccess?.sessionTokenHash !== hash ||
+        !current.viewerAccess.controllerId ||
+        current.expiresAtMs <= now ||
+        (!allowTerminalRead && current.state !== "waiting" && current.state !== "control")
+      ) {
+        throw new HumanInterventionConflictError(
+          "Invalid or expired human browser viewer authority",
+        );
+      }
+    };
+    const record = await this.get(id, assertCurrent);
+    return { controllerId: record.viewerAccess!.controllerId!, assertCurrent };
   }
 
   async claim(
@@ -225,8 +329,12 @@ export class HumanInterventionService {
     );
   }
 
-  async authorizeControl(input: HumanInterventionControlRequest): Promise<HumanInterventionRecord> {
+  async authorizeControl(
+    input: HumanInterventionControlRequest,
+    guard?: MutationAuthorityGuard,
+  ): Promise<HumanInterventionRecord> {
     const located = await this.requireCurrentLocated(input.id);
+    guard?.(located.record, this.now());
     this.assertController(located.record, input);
     return located.record;
   }
@@ -427,9 +535,10 @@ export class HumanInterventionService {
         return undefined;
       }
       try {
-        assertCurrentAuthority?.();
+        const now = this.now();
+        assertCurrentAuthority?.(current, now);
         // Read time at the mutation boundary, after any queued store work.
-        result = updateValue(current, this.now());
+        result = updateValue(current, now);
         return result;
       } catch (caught) {
         error = toErrorObject(caught, "Human browser handoff transition failed");

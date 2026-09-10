@@ -97,22 +97,31 @@ describe("HumanInterventionCoordinator", () => {
   });
 
   it("creates an owner-bound handoff with a portable chat link", async () => {
-    const { coordinator } = createCoordinator();
-    const resolveHostname = vi.fn(async () => "example.com");
+    const { coordinator, service } = createCoordinator();
+    const resolveTab = vi.fn(async () => ({ targetId: "canonical-tab", hostname: "example.com" }));
     const result = await coordinator.request(createContext(), {
       profile: "openclaw",
       targetId: "tab-1",
       reason: "Human verification required",
-      resolveHostname,
+      resolveTab,
     });
 
-    expect(result.launchUrl).toBe("https://claw.example/openclaw/focus/browser/id-1");
+    const launch = new URL(result.launchUrl);
+    expect(`${launch.origin}${launch.pathname}`).toBe(
+      "https://claw.example/openclaw/focus/browser/id-1",
+    );
+    const token = new URLSearchParams(launch.hash.slice(1)).get("handoffToken");
+    expect(token).toMatch(/^[A-Za-z0-9_-]{43}$/u);
+    expect(launch.search).toBe("");
+    await expect(
+      service.redeemViewerLink(result.record.id, token!, "s".repeat(43)),
+    ).resolves.toMatchObject({ expiresAtMs: result.record.expiresAtMs });
     expect(result.record).toMatchObject({
       owner: { channel: "telegram", accountId: "default", senderId: "42" },
       origin: { channel: "telegram", accountId: "default", to: "42" },
       hostname: "example.com",
     });
-    expect(resolveHostname).toHaveBeenCalledTimes(1);
+    expect(resolveTab).toHaveBeenCalledTimes(1);
   });
 
   it("resolves the target hostname only after managed automation has drained", async () => {
@@ -122,20 +131,22 @@ describe("HumanInterventionCoordinator", () => {
       profile: "openclaw",
       targetId: "tab-1",
     });
-    const resolveHostname = vi.fn(async () => "example.com");
+    const resolveTab = vi.fn(async () => ({ targetId: "canonical-tab", hostname: "example.com" }));
 
     const request = coordinator.request(createContext(), {
       profile: "openclaw",
       targetId: "tab-1",
       reason: "Human verification required",
-      resolveHostname,
+      resolveTab,
     });
     await Promise.resolve();
-    expect(resolveHostname).not.toHaveBeenCalled();
+    expect(resolveTab).not.toHaveBeenCalled();
 
     await releaseAutomation();
-    await expect(request).resolves.toMatchObject({ record: { hostname: "example.com" } });
-    expect(resolveHostname).toHaveBeenCalledTimes(1);
+    await expect(request).resolves.toMatchObject({
+      record: { hostname: "example.com", browser: { targetId: "canonical-tab" } },
+    });
+    expect(resolveTab).toHaveBeenCalledTimes(1);
   });
 
   it("requires live owner and reply-route authority", async () => {

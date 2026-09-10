@@ -319,3 +319,130 @@ describe("HumanInterventionService", () => {
     await expect(request(service)).resolves.toMatchObject({ id: "handoff-2", state: "waiting" });
   });
 });
+
+describe("handoff viewer capabilities", () => {
+  const session = "a".repeat(43);
+  it("redeems once atomically and persists only hashes across service restarts", async () => {
+    const store = createMemoryStore();
+    const service = new HumanInterventionService(store);
+    const record = await request(service);
+    const link = await service.issueViewerLink(record.id);
+    const restarted = new HumanInterventionService(store);
+    const results = await Promise.allSettled([
+      restarted.redeemViewerLink(record.id, link.token, session),
+      service.redeemViewerLink(record.id, link.token, session),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    const stored = JSON.stringify(await store.entries());
+    expect(stored).not.toContain(link.token);
+    expect(stored).not.toContain(session);
+    const authority = await restarted.viewerAuthority(record.id, session);
+    await expect(
+      restarted.claim(
+        { id: record.id, controllerId: authority.controllerId },
+        authority.assertCurrent,
+      ),
+    ).resolves.toMatchObject({ state: "control" });
+    await expect(service.issueViewerLink(record.id)).rejects.toThrow();
+  });
+
+  it("rejects malformed secrets, another handoff, expiry and terminal mutations", async () => {
+    let now = 1_000;
+    const service = new HumanInterventionService(createMemoryStore(), { now: () => now });
+    const record = await request(service);
+    const other = await request(service, {
+      browser: { target: "host", profile: "other", targetId: "tab-2" },
+    });
+    const link = await service.issueViewerLink(record.id);
+    await expect(service.redeemViewerLink(record.id, link.token, "short")).rejects.toThrow();
+    await expect(service.redeemViewerLink(other.id, link.token, session)).rejects.toThrow();
+    await service.redeemViewerLink(record.id, link.token, session);
+    await expect(service.viewerAuthority(other.id, session)).rejects.toThrow();
+    const authority = await service.viewerAuthority(record.id, session);
+    await service.cancel(record.id);
+    await expect(
+      service.claim(
+        { id: record.id, controllerId: authority.controllerId },
+        authority.assertCurrent,
+      ),
+    ).rejects.toThrow();
+    await expect(service.viewerAuthority(record.id, session)).rejects.toThrow();
+    const terminal = await service.viewerAuthority(record.id, session, true);
+    await expect(service.get(record.id, terminal.assertCurrent)).resolves.toMatchObject({
+      state: "cancelled",
+    });
+    now = record.expiresAtMs;
+    await expect(service.viewerAuthority(record.id, session, true)).rejects.toThrow();
+  });
+
+  it("checks credential revocation at the atomic mutation boundary", async () => {
+    const store = createMemoryStore();
+    const service = new HumanInterventionService(store);
+    const record = await request(service);
+    const link = await service.issueViewerLink(record.id);
+    await service.redeemViewerLink(record.id, link.token, session);
+    const authority = await service.viewerAuthority(record.id, session);
+    const originalUpdate = store.update!;
+    store.update = async (key, mutate) =>
+      originalUpdate(key, (current) =>
+        mutate(current ? { ...current, viewerAccess: undefined } : current),
+      );
+    await expect(
+      service.claim(
+        { id: record.id, controllerId: authority.controllerId },
+        authority.assertCurrent,
+      ),
+    ).rejects.toThrow("authority");
+  });
+
+  it("rejects unredeemed links after their deadline", async () => {
+    let now = 0;
+    const service = new HumanInterventionService(createMemoryStore(), { now: () => now });
+    const record = await request(service);
+    const link = await service.issueViewerLink(record.id);
+    now = link.expiresAtMs;
+    await expect(service.redeemViewerLink(record.id, link.token, session)).rejects.toThrow();
+  });
+
+  it("invalidates mutation authority after completion while allowing final status reads", async () => {
+    const service = new HumanInterventionService(createMemoryStore());
+    const record = await request(service);
+    const link = await service.issueViewerLink(record.id);
+    await service.redeemViewerLink(record.id, link.token, session);
+    const authority = await service.viewerAuthority(record.id, session);
+    const claimed = await service.claim(
+      { id: record.id, controllerId: authority.controllerId },
+      authority.assertCurrent,
+    );
+    const control = {
+      id: record.id,
+      controllerId: authority.controllerId,
+      generation: claimed.generation,
+    };
+    await service.complete(control, authority.assertCurrent);
+    await expect(service.complete(control, authority.assertCurrent)).rejects.toThrow("authority");
+    await expect(service.authorizeControl(control, authority.assertCurrent)).rejects.toThrow(
+      "authority",
+    );
+    const reader = await service.viewerAuthority(record.id, session, true);
+    await expect(service.get(record.id, reader.assertCurrent)).resolves.toMatchObject({
+      state: "resume_pending",
+    });
+  });
+
+  it("rechecks link expiry inside atomic redemption", async () => {
+    let now = 0;
+    const store = createMemoryStore();
+    const service = new HumanInterventionService(store, { now: () => now });
+    const record = await request(service);
+    const link = await service.issueViewerLink(record.id);
+    const originalUpdate = store.update!;
+    store.update = async (key, mutate) => {
+      now = link.expiresAtMs;
+      return originalUpdate(key, mutate);
+    };
+    await expect(service.redeemViewerLink(record.id, link.token, session)).rejects.toThrow();
+    expect((await store.lookup("host:openclaw"))?.viewerAccess?.sessionTokenHash).toBeUndefined();
+  });
+});

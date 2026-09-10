@@ -3,9 +3,19 @@ import { en } from "./en.ts";
 
 const catalog = {
   humanBrowser: {
+    linkExplanation:
+      "Control only the browser tab shared by your agent. This link does not give access to Gateway settings or other tabs.",
+    linkExpired:
+      "This link has expired, was already used, or is no longer authorized. Ask your agent for a new handoff link.",
+    linkConnectionError:
+      "Could not reach the browser handoff. Check your connection and try again.",
+    linkRequestError:
+      "The browser handoff request failed. Try again or ask your agent for a new link.",
+    linkStorageError: "Allow site storage in this browser, then reopen the handoff link.",
     title: "Browser action needed",
     loading: "Loading browser handoff…",
     retry: "Try again",
+    refreshStatus: "Refresh status",
     unavailable: "Human browser handoff is unavailable on this Gateway.",
     expired: "This browser handoff has expired.",
     cancelled: "This browser handoff was cancelled.",

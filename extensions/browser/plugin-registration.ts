@@ -27,6 +27,7 @@ import {
 } from "./src/browser-node-commands.js";
 import { parseBrowserTabToolBinding } from "./src/browser-tool-binding.js";
 import { describeBrowserTool } from "./src/browser-tool-description.js";
+import type { HumanInterventionToolCallbacks } from "./src/browser-tool.js";
 import {
   BrowserToolOutputSchema,
   createBrowserToolSchema,
@@ -40,8 +41,12 @@ import {
   type SystemProfileImportState,
 } from "./src/browser/system-profile-import-state.js";
 import { humanInterventionHandoffOwner } from "./src/human-intervention/constants.js";
-import { HumanInterventionCoordinator } from "./src/human-intervention/coordinator.js";
+import {
+  HumanInterventionCoordinator,
+  resolveHumanInterventionBasePath,
+} from "./src/human-intervention/coordinator.js";
 import { registerHumanInterventionGatewayMethods } from "./src/human-intervention/gateway.js";
+import { createHumanInterventionHttpHandler } from "./src/human-intervention/http.js";
 import {
   HumanInterventionService,
   type HumanInterventionRecord,
@@ -49,22 +54,6 @@ import {
 
 const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
 const logger = createSubsystemLogger("browser");
-
-type HumanInterventionToolCallbacks = {
-  request: (input: {
-    profile: string;
-    targetId: string;
-    reason: string;
-    resolveHostname: () => Promise<string>;
-  }) => Promise<{ record: { id: string; state: string; hostname: string }; launchUrl: string }>;
-  waitForHuman: (input: {
-    id: string;
-    launchUrl: string;
-    hostname: string;
-    reason: string;
-    handoffOwner: string;
-  }) => Promise<void>;
-};
 
 type BrowserAutomationGateCallbacks = {
   beginAutomation: (browser: {
@@ -370,6 +359,8 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
   api.registerTool(((ctx: OpenClawPluginToolContext) => {
     const config = ctx.getRuntimeConfig?.() ?? ctx.runtimeConfig ?? ctx.config;
     const humanInterventionEnabled = isHumanInterventionEnabled(config);
+    const delivery = ctx.delivery;
+    const yieldTurn = ctx.yieldTurn;
     return createLazyBrowserTool(
       {
         ...createBrowserToolOptions(ctx),
@@ -378,7 +369,8 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
         },
         ...(humanInterventionEnabled &&
         ctx.senderIsOwner === true &&
-        ctx.yieldTurn &&
+        yieldTurn &&
+        delivery &&
         ctx.requesterSenderId &&
         ctx.sessionKey &&
         ctx.agentId &&
@@ -387,15 +379,24 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
               humanIntervention: {
                 request: (input) => humanInterventionCoordinator.request(ctx, input),
                 waitForHuman: async ({ id, launchUrl, hostname, reason, handoffOwner }) => {
-                  await ctx.yieldTurn?.({
-                    handoffOwner,
-                    message: `Waiting for human browser intervention ${id}.`,
-                    acknowledgment: [
-                      `OpenClaw needs your help on ${hostname}: ${reason}`,
-                      `Open browser: ${launchUrl}`,
-                      "The task is paused until you select Done — continue task.",
-                    ].join("\n"),
-                  });
+                  try {
+                    // This link is required task input, not an optional waiting
+                    // acknowledgment that prior progress may suppress.
+                    await delivery.send({
+                      text: [
+                        `OpenClaw needs your help on ${hostname}: ${reason}`,
+                        `Open browser: ${launchUrl}`,
+                        "The task is paused until you select Done — continue agent.",
+                      ].join("\n"),
+                    });
+                    await yieldTurn({
+                      handoffOwner,
+                      message: `Waiting for human browser intervention ${id}.`,
+                    });
+                  } catch (error) {
+                    await humanInterventionCoordinator.cancel(id);
+                    throw error;
+                  }
                 },
               },
             }
@@ -430,6 +431,28 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
     },
     isEnabled: () => isHumanInterventionEnabled(currentConfig()),
   });
+  const handoffBasePath = resolveHumanInterventionBasePath(
+    resolveHumanInterventionPublicOrigin(currentConfig()) ?? "",
+    currentConfig().gateway?.controlUi?.basePath,
+  );
+  const handoffHttp = createHumanInterventionHttpHandler({
+    basePath: handoffBasePath,
+    coordinator: humanInterventionCoordinator,
+    isEnabled: () => isHumanInterventionEnabled(currentConfig()),
+    publicOrigin: () => resolveHumanInterventionPublicOrigin(currentConfig()) ?? "",
+    dispatchBrowser: async (request) => {
+      await loadBrowserRegistrationRuntimeModule();
+      const { dispatchBrowserControlRequest } =
+        await import("./src/browser/local-dispatch.runtime.js");
+      return await dispatchBrowserControlRequest(request);
+    },
+  });
+  api.registerHttpRoute({
+    path: `${handoffBasePath}/browser/handoff`,
+    auth: "plugin",
+    match: "prefix",
+    handler: handoffHttp,
+  });
   // Remote extension relay: lets the Chrome extension connect directly to this
   // gateway over wss:// (no node host on the browser machine). auth:"plugin"
   // with no nodeCapability means the gateway does not pre-enforce token auth;
@@ -451,21 +474,26 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       return await handleGatewayExtensionUpgrade(req, socket, head);
     },
   });
-  api.registerHttpRoute({
-    path: "/browser/screencast",
-    auth: "plugin",
-    match: "exact",
-    handler: (_req: IncomingMessage, res: ServerResponse) => {
-      res.writeHead(426, { "Content-Type": "text/plain" });
-      res.end("Upgrade Required: connect the browser screencast over WebSocket.");
-    },
-    handleUpgrade: async (req: IncomingMessage, socket: Duplex, head: Buffer) => {
-      await loadBrowserRegistrationRuntimeModule();
-      const { handleBrowserScreencastUpgrade } =
-        await import("./src/browser/screencast/upgrade.js");
-      return await handleBrowserScreencastUpgrade(req, socket, head);
-    },
-  });
+  for (const routePath of new Set([
+    "/browser/screencast",
+    `${handoffBasePath}/browser/screencast`,
+  ])) {
+    api.registerHttpRoute({
+      path: routePath,
+      auth: "plugin",
+      match: "exact",
+      handler: (_req: IncomingMessage, res: ServerResponse) => {
+        res.writeHead(426, { "Content-Type": "text/plain" });
+        res.end("Upgrade Required: connect the browser screencast over WebSocket.");
+      },
+      handleUpgrade: async (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+        await loadBrowserRegistrationRuntimeModule();
+        const { handleBrowserScreencastUpgrade } =
+          await import("./src/browser/screencast/upgrade.js");
+        return await handleBrowserScreencastUpgrade(req, socket, head, routePath);
+      },
+    });
+  }
   api.registerService(createLazyBrowserPluginService());
   api.registerService({
     id: "browser-human-intervention",
@@ -473,6 +501,7 @@ export function registerBrowserPlugin(api: OpenClawPluginApi) {
       await humanInterventionCoordinator.start();
     },
     stop: async () => {
+      handoffHttp.dispose();
       humanInterventionCoordinator.stop();
     },
   });

@@ -5379,58 +5379,75 @@ describe("resolveBrowserToolTimeoutMs", () => {
 describe("human browser intervention", () => {
   registerBrowserToolAfterEachReset();
 
-  it("binds the handoff to the exact managed host tab and derives the hostname", async () => {
-    setResolvedBrowserProfiles({
-      openclaw: { driver: "openclaw", cdpPort: 18792 },
-    });
-    browserClientMocks.browserTabs.mockResolvedValueOnce({
-      running: true,
-      tabs: [{ targetId: "tab-1", url: "https://accounts.example.com/challenge" }],
-    });
-    const request = vi.fn(async (input: { resolveHostname: () => Promise<string> }) => ({
-      record: {
+  it.each(["tab-1", "t1", "challenge", "tab-"])(
+    "binds handoff reference %s to the exact managed host tab",
+    async (targetId) => {
+      setResolvedBrowserProfiles({
+        openclaw: { driver: "openclaw", cdpPort: 18792 },
+      });
+      browserClientMocks.browserTabs.mockResolvedValueOnce({
+        running: true,
+        tabs: [
+          {
+            targetId: "tab-1",
+            tabId: "t1",
+            label: "challenge",
+            url: "https://accounts.example.com/challenge",
+          },
+        ],
+      });
+      const request = vi.fn(
+        async (input: { resolveTab: () => Promise<{ targetId: string; hostname: string }> }) => {
+          const tab = await input.resolveTab();
+          return {
+            record: {
+              id: "handoff-1",
+              state: "waiting",
+              hostname: tab.hostname,
+              browser: { targetId: tab.targetId },
+            },
+            launchUrl: "https://claw.example/focus/browser/handoff-1",
+          };
+        },
+      );
+      const beginAutomation = vi.fn(async () => vi.fn(async () => undefined));
+      const waitForHuman = vi.fn(async () => undefined);
+      const tool = createBrowserTool({
+        toolCapabilities: resolveBrowserToolCapabilities({ humanInterventionEnabled: true }),
+        automationGate: { beginAutomation },
+        humanIntervention: { request, waitForHuman },
+      });
+
+      const result = await tool.execute("handoff", {
+        action: "handoff",
+        target: "host",
+        profile: "openclaw",
+        targetId,
+        reason: "Human verification required",
+      });
+
+      expect(request).toHaveBeenCalledWith({
+        profile: "openclaw",
+        targetId,
+        reason: "Human verification required",
+        resolveTab: expect.any(Function),
+      });
+      expect(result.details).toMatchObject({
+        ok: true,
+        waitingForHuman: true,
+        handoffId: "handoff-1",
+        targetId: "tab-1",
+      });
+      expect(beginAutomation).not.toHaveBeenCalled();
+      expect(waitForHuman).toHaveBeenCalledWith({
         id: "handoff-1",
-        state: "waiting",
-        hostname: await input.resolveHostname(),
-      },
-      launchUrl: "https://claw.example/focus/browser/handoff-1",
-    }));
-    const beginAutomation = vi.fn(async () => vi.fn(async () => undefined));
-    const waitForHuman = vi.fn(async () => undefined);
-    const tool = createBrowserTool({
-      toolCapabilities: resolveBrowserToolCapabilities({ humanInterventionEnabled: true }),
-      automationGate: { beginAutomation },
-      humanIntervention: { request, waitForHuman },
-    });
-
-    const result = await tool.execute("handoff", {
-      action: "handoff",
-      target: "host",
-      profile: "openclaw",
-      targetId: "tab-1",
-      reason: "Human verification required",
-    });
-
-    expect(request).toHaveBeenCalledWith({
-      profile: "openclaw",
-      targetId: "tab-1",
-      reason: "Human verification required",
-      resolveHostname: expect.any(Function),
-    });
-    expect(result.details).toMatchObject({
-      ok: true,
-      waitingForHuman: true,
-      handoffId: "handoff-1",
-    });
-    expect(beginAutomation).not.toHaveBeenCalled();
-    expect(waitForHuman).toHaveBeenCalledWith({
-      id: "handoff-1",
-      launchUrl: "https://claw.example/focus/browser/handoff-1",
-      hostname: "accounts.example.com",
-      reason: "Human verification required",
-      handoffOwner: "browser_human_intervention:handoff",
-    });
-  });
+        launchUrl: "https://claw.example/focus/browser/handoff-1",
+        hostname: "accounts.example.com",
+        reason: "Human verification required",
+        handoffOwner: "browser_human_intervention:handoff",
+      });
+    },
+  );
 
   it("blocks managed automation from a context that cannot create handoffs", async () => {
     setResolvedBrowserProfiles({

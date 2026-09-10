@@ -31,12 +31,14 @@ vi.mock("./src/browser/system-profile-import-state.js", () => ({
   configureSystemProfileImportStateStore: vi.fn(),
 }));
 
-function registerLifecycleCallbacks(path: string) {
+function registerLifecycleCallbacks(path: string, basePath = "") {
   let route: Parameters<OpenClawPluginApi["registerHttpRoute"]>[0] | undefined;
   let service: OpenClawPluginService | undefined;
   registerBrowserPlugin(
     createTestPluginApi({
+      config: { gateway: { controlUi: { basePath } } },
       runtime: {
+        config: {},
         state: { openKeyedStore: vi.fn(() => ({ update: vi.fn() })) },
       } as never,
       registerHttpRoute(value) {
@@ -73,14 +75,32 @@ describe("browser websocket shutdown registration", () => {
     const socket = {} as Duplex;
     const head = Buffer.alloc(0);
 
-    for (const path of ["/browser/screencast", "/browser/extension"]) {
-      const { handleUpgrade, stop } = registerLifecycleCallbacks(path);
+    for (const path of [
+      "/browser/screencast",
+      "/browser/extension",
+      "/custom/browser/screencast",
+    ]) {
+      const { handleUpgrade, stop } = registerLifecycleCallbacks(
+        path,
+        path.startsWith("/custom/") ? "/custom" : "",
+      );
       await expect(handleUpgrade(req, socket, head)).resolves.toBe(true);
       await stop({} as never);
     }
 
-    expect(runtimeMocks.handleBrowserScreencastUpgrade).toHaveBeenCalledWith(req, socket, head);
+    expect(runtimeMocks.handleBrowserScreencastUpgrade).toHaveBeenCalledWith(
+      req,
+      socket,
+      head,
+      "/browser/screencast",
+    );
+    expect(runtimeMocks.handleBrowserScreencastUpgrade).toHaveBeenCalledWith(
+      req,
+      socket,
+      head,
+      "/custom/browser/screencast",
+    );
     expect(runtimeMocks.handleGatewayExtensionUpgrade).toHaveBeenCalledWith(req, socket, head);
-    expect(runtimeMocks.stopBrowserControlService).toHaveBeenCalledTimes(2);
+    expect(runtimeMocks.stopBrowserControlService).toHaveBeenCalledTimes(3);
   });
 });

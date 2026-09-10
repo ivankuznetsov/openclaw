@@ -15,13 +15,15 @@ describe("browser screencast WebSocket upgrade", () => {
   let server: Server;
   let url: string;
   let clients: WebSocket[];
+  let routePath: string;
 
   beforeEach(async () => {
     mocks.attach.mockReset();
     clients = [];
+    routePath = "/browser/screencast";
     server = createServer();
     server.on("upgrade", (req, socket, head) => {
-      void handleBrowserScreencastUpgrade(req, socket, head);
+      void handleBrowserScreencastUpgrade(req, socket, head, routePath);
     });
     server.listen(0, "127.0.0.1");
     await once(server, "listening");
@@ -62,15 +64,20 @@ describe("browser screencast WebSocket upgrade", () => {
     });
   }
 
-  it("accepts a minted token once and rejects invalid or reused tokens with HTTP 401", async () => {
-    expect(await rejected("invalid")).toBe(401);
-    const params = screencastParams();
-    const token = mintBrowserScreencastToken(params).token;
-    const ws = connect(token);
-    await once(ws, "open");
-    expect(mocks.attach).toHaveBeenCalledWith(params, expect.any(WebSocket));
-    expect(await rejected(token)).toBe(401);
-  });
+  it.each(["", "/custom"])(
+    "accepts a minted token once under %s and rejects invalid/reused tokens",
+    async (basePath) => {
+      routePath = `${basePath}/browser/screencast`;
+      url = `${new URL(url).origin}${routePath}`;
+      expect(await rejected("invalid")).toBe(401);
+      const params = screencastParams();
+      const token = mintBrowserScreencastToken(params).token;
+      const ws = connect(token);
+      await once(ws, "open");
+      expect(mocks.attach).toHaveBeenCalledWith(params, expect.any(WebSocket));
+      expect(await rejected(token)).toBe(401);
+    },
+  );
 
   it("rejects a fresh token whose requester aborts during consumption", async () => {
     const requester = new AbortController();
