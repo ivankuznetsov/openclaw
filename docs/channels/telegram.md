@@ -36,7 +36,7 @@ Telegram is production-ready for bot DMs and groups via grammY. Long polling is 
 
 ## Human browser handoff
 
-An owner-authorized Telegram DM can receive a portable **Open browser** link when an agent pauses on a live verification step in a managed browser tab. Open the link on the phone, select **Take control** to redeem its one-use handoff credential, complete the blocked step, and select **Done — continue agent**. The task resumes in the same Telegram conversation. Group chats do not receive handoff links. See [Human browser intervention](/tools/browser-human-intervention) for setup and security details.
+An owner-authorized Telegram DM can receive a portable **Open browser** link when an agent pauses on a live verification step in a managed browser tab. Open the link on the phone to enter browser control directly, complete the blocked step, and select **Done — continue agent**. The task resumes in the same Telegram conversation. Group chats do not receive handoff links. See [Human browser intervention](/tools/browser-human-intervention) for setup and security details.
 
 ## Where each section moved
 
