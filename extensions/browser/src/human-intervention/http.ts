@@ -172,9 +172,18 @@ export function createHumanInterventionHttpHandler(options: Options) {
         }
         authority.assertCurrent(current, now);
       };
+      const controllerId = () => {
+        const nonce = body.controllerId;
+        if (typeof nonce !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(nonce)) {
+          throw new Error("Invalid controller claim");
+        }
+        // A claim nonce distinguishes retired mounts without granting authority
+        // to impersonate a controller in another authenticated viewer session.
+        return `${authority.controllerId}:${nonce}`;
+      };
       const control = () => ({
         id,
-        controllerId: authority.controllerId,
+        controllerId: controllerId(),
         generation: readGeneration(body),
       });
       let result: unknown;
@@ -183,7 +192,7 @@ export function createHumanInterventionHttpHandler(options: Options) {
       } else if (body.action === "claim") {
         result = {
           handoff: present(
-            await options.coordinator.claim({ id, controllerId: authority.controllerId }, guard),
+            await options.coordinator.claim({ id, controllerId: controllerId() }, guard),
           ),
         };
       } else if (body.action === "renew" || body.action === "leave" || body.action === "complete") {

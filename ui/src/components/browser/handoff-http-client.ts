@@ -107,9 +107,9 @@ export class HandoffHttpClient implements HumanInterventionClient {
       throw new Error(t("humanBrowser.linkRequestError"));
     }
     const body = params && typeof params === "object" ? { ...params } : {};
-    // The endpoint owns the handoff and controller identities.
+    // The endpoint owns the handoff; preserve each local claim's fencing nonce.
     // SAFETY: body is a fresh object copied from object parameters or an empty object.
-    const { id: _id, controllerId: _controllerId, ...operation } = body as Record<string, unknown>;
+    const { id: _id, ...operation } = body as Record<string, unknown>;
     const { action: input, ...fields } = operation;
     return this.post<T>({ ...fields, ...(input === undefined ? {} : { input }), action }, true);
   }

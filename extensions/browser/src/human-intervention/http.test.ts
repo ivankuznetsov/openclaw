@@ -118,7 +118,12 @@ async function setup(basePath = "") {
     });
     return { record, link: await service.issueViewerLink(record.id) };
   }
-  async function post(id: string, body: unknown, token?: string, origin = "https://claw.example") {
+  async function post(
+    id: string,
+    body: Record<string, unknown>,
+    token?: string,
+    origin = "https://claw.example",
+  ) {
     return fetch(`${base}/browser/handoff/${id}`, {
       method: "POST",
       headers: {
@@ -126,7 +131,7 @@ async function setup(basePath = "") {
         "content-type": "application/json",
         ...(token ? { authorization: `Bearer ${token}` } : {}),
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ controllerId: "phone-a", ...body }),
     });
   }
   return {
@@ -144,6 +149,72 @@ async function setup(basePath = "") {
 }
 
 describe("scoped handoff HTTP", () => {
+  it("fences per-claim input and release while keeping same-claim retry idempotent", async () => {
+    const env = await setup();
+    const { record, link } = await env.create();
+    const token = randomBytes(32).toString("base64url");
+    await env.post(record.id, { action: "redeem", token: link.token, sessionToken: token });
+    const post = (action: string, controllerId: unknown, fields = {}) =>
+      env.post(record.id, { action, controllerId, ...fields }, token);
+    expect((await post("claim", "claim-a")).status).toBe(200);
+    const first = await env.service.get(record.id);
+    expect((await post("claim", "claim-a")).status).toBe(200);
+    expect((await env.service.get(record.id)).generation).toBe(first.generation);
+    expect((await post("claim", "claim-b")).status).toBe(403);
+    for (const nonce of [undefined, "", "x".repeat(129), first.controllerId]) {
+      expect((await post("claim", nonce)).status).toBe(403);
+    }
+    expect(
+      (await post("browser", "claim-a", { generation: first.generation, operation: "screencast" }))
+        .status,
+    ).toBe(200);
+    const streamSignal = env.dispatchBrowser.mock.calls.at(-1)?.[0].requester?.signal;
+    expect(streamSignal?.aborted).toBe(false);
+    expect((await post("leave", "claim-a", { generation: first.generation })).status).toBe(200);
+    expect(streamSignal?.aborted).toBe(true);
+    expect((await post("claim", "claim-b")).status).toBe(200);
+    const second = await env.service.get(record.id);
+    expect(second.generation).toBeGreaterThan(first.generation);
+    for (const generation of [first.generation, second.generation]) {
+      for (const action of ["leave", "renew", "complete"]) {
+        expect((await post(action, "claim-a", { generation })).status).toBe(403);
+      }
+      expect(
+        (
+          await post("browser", "claim-a", {
+            generation,
+            operation: "act",
+            input: { kind: "clickCoords", x: 10, y: 10 },
+          })
+        ).status,
+      ).toBe(403);
+    }
+    expect(env.dispatchBrowser).toHaveBeenCalledTimes(1);
+    expect((await env.service.get(record.id)).state).toBe("control");
+    expect((await post("renew", "claim-b", { generation: second.generation })).status).toBe(200);
+    const other = await env.create("other");
+    const otherToken = randomBytes(32).toString("base64url");
+    await env.post(other.record.id, {
+      action: "redeem",
+      token: other.link.token,
+      sessionToken: otherToken,
+    });
+    expect(
+      (await env.post(other.record.id, { action: "claim", controllerId: "claim-b" }, otherToken))
+        .status,
+    ).toBe(200);
+    expect((await env.service.get(other.record.id)).controllerId).not.toBe(second.controllerId);
+    expect(
+      (
+        await env.post(
+          record.id,
+          { action: "renew", controllerId: "claim-b", generation: second.generation },
+          otherToken,
+        )
+      ).status,
+    ).toBe(403);
+  });
+
   it.each(["", "/custom"])("keeps previews inert and redeems once under %s", async (basePath) => {
     const env = await setup(basePath);
     const { record, link } = await env.create();
@@ -174,9 +245,9 @@ describe("scoped handoff HTTP", () => {
     const { record, link } = await env.create();
     const token = randomBytes(32).toString("base64url");
     await env.post(record.id, { action: "redeem", token: link.token, sessionToken: token });
-    const claim = await env.post(record.id, { action: "claim", controllerId: "attacker" }, token);
+    const claim = await env.post(record.id, { action: "claim", controllerId: "phone-a" }, token);
     const { handoff } = await claim.json();
-    expect((await env.service.get(record.id)).controllerId).not.toBe("attacker");
+    expect((await env.service.get(record.id)).controllerId).not.toBe("phone-a");
     const browser = {
       action: "browser",
       generation: handoff.generation,

@@ -141,7 +141,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_HANDOFF_E2E === "1")(
           );
           const id = pending.record.id;
           const sessionToken = randomBytes(32).toString("base64url");
-          const post = async (body: unknown, handoffId = id) =>
+          const post = async (body: Record<string, unknown>, handoffId = id) =>
             await fetch(`${endpoint}/browser/handoff/${handoffId}`, {
               method: "POST",
               headers: {
@@ -149,7 +149,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_HANDOFF_E2E === "1")(
                 "content-type": "application/json",
                 authorization: `Bearer ${sessionToken}`,
               },
-              body: JSON.stringify(body),
+              body: JSON.stringify({ controllerId: "phone-a", ...body }),
             });
           const token = new URLSearchParams(new URL(pending.launchUrl).hash.slice(1)).get(
             "handoffToken",
@@ -192,7 +192,7 @@ describe.runIf(process.env.OPENCLAW_BROWSER_HANDOFF_E2E === "1")(
 
           // Unauthorized requests never reach the real dispatcher, as well as
           // leaving the real target unchanged. No mock browser operation exists.
-          const assertRejected = async (body: unknown, handoffId = id) => {
+          const assertRejected = async (body: Record<string, unknown>, handoffId = id) => {
             const beforeDispatch = dispatched;
             const beforeText = await page.locator("button").textContent();
             const beforeGeometry = await page.evaluate(() => [

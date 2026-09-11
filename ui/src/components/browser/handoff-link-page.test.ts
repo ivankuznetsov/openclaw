@@ -221,7 +221,7 @@ describe("scoped handoff links", () => {
       expect(url).toBe(`${location.origin}/custom/browser/handoff/test`);
       expect(init.headers).toMatchObject({ Authorization: `Bearer ${access.sessionToken}` });
       expect(JSON.parse(init.body as string)).not.toHaveProperty("id");
-      expect(JSON.parse(init.body as string)).not.toHaveProperty("controllerId");
+      expect(JSON.parse(init.body as string)).toHaveProperty("controllerId", "other");
     }
     await client.request("browser.handoff.browser", {
       operation: "act",
