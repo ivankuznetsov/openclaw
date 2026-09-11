@@ -667,6 +667,7 @@ export async function resizeViewportViaPlaywright(opts: {
   width: number;
   height: number;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   const state = ensurePageState(page);
@@ -677,7 +678,11 @@ export async function resizeViewportViaPlaywright(opts: {
   await runPageEmulationTransition({
     state,
     signal: opts.signal,
-    run: () => setViewportSizeOnPage(page, state, viewport),
+    run: () =>
+      setViewportSizeOnPage(page, state, viewport, () => {
+        opts.signal?.throwIfAborted();
+        opts.assertCurrent?.();
+      }),
   });
 }
 

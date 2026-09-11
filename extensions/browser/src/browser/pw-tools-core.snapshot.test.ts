@@ -514,6 +514,73 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(page.setViewportSize).toHaveBeenCalledWith({ width: 1, height: 1 });
   });
 
+  it("rechecks resize authority after waiting for an earlier emulation transition", async () => {
+    const previous = createDeferred<void>();
+    const page = { setViewportSize: vi.fn(async () => {}) };
+    getPageForTargetId.mockResolvedValue(page);
+    ensurePageState.mockReturnValueOnce({ emulation: { transitionTail: previous.promise } });
+    let current = true;
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const pending = mod.resizeViewportViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      width: 390,
+      height: 700,
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("revoked");
+        }
+      },
+    });
+    await vi.waitFor(() => expect(ensurePageState).toHaveBeenCalledWith(page));
+    current = false;
+    previous.resolve();
+    await expect(pending).rejects.toThrow("revoked");
+    expect(page.setViewportSize).not.toHaveBeenCalled();
+  });
+
+  it.each(["authority", "signal"])(
+    "fences resize when %s is revoked during device-metrics clearing",
+    async (mode) => {
+      const controller = new AbortController();
+      let current = true;
+      const send = vi.fn(async () => {
+        current = false;
+        if (mode === "signal") {
+          controller.abort(new Error("revoked"));
+        }
+      });
+      const page = { setViewportSize: vi.fn(async () => {}) };
+      getPageForTargetId.mockResolvedValue(page);
+      ensurePageState.mockReturnValueOnce({
+        emulation: {
+          metricsOwner: {
+            session: { send },
+            viewport: { width: 1000, height: 1100 },
+          },
+        },
+      });
+      const mod = await import("./pw-tools-core.snapshot.js");
+      await expect(
+        mod.resizeViewportViaPlaywright({
+          cdpUrl: "http://127.0.0.1:9222",
+          targetId: "tab-1",
+          width: 390,
+          height: 700,
+          signal: controller.signal,
+          assertCurrent: () => {
+            if (!current) {
+              throw new Error("revoked");
+            }
+          },
+        }),
+      ).rejects.toThrow("revoked");
+      await Promise.resolve();
+      expect(send).toHaveBeenCalledWith("Emulation.clearDeviceMetricsOverride");
+      expect(page.setViewportSize).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects excessive viewport dimensions before calling Playwright", async () => {
     const page = { setViewportSize: vi.fn(async () => {}) };
     getPageForTargetId.mockResolvedValue(page);

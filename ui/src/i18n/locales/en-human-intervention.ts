@@ -3,8 +3,6 @@ import { en } from "./en.ts";
 
 const catalog = {
   humanBrowser: {
-    linkExplanation:
-      "Control only the browser tab shared by your agent. This link does not give access to Gateway settings or other tabs.",
     linkExpired:
       "This link has expired, was already used, or is no longer authorized. Ask your agent for a new handoff link.",
     linkConnectionError:

@@ -96,6 +96,65 @@ describe("scoped handoff links", () => {
     expect(init.credentials).toBe("omit");
   });
 
+  it.each(["refused", "throws"] as const)(
+    "attempts to close after successful completion and keeps a useful fallback when closing is %s",
+    async (mode) => {
+      const close = vi.spyOn(window, "close").mockImplementation(() => {
+        if (mode === "throws") {
+          throw new Error("Browser refused to close");
+        }
+      });
+      const fetchMock = mockEndpoint();
+      const normal = fetchMock.getMockImplementation()!;
+      let finish!: () => void;
+      fetchMock.mockImplementation((url, options) => {
+        const body = JSON.parse(options.body as string);
+        if (body.action === "complete") {
+          return new Promise((resolve) => {
+            finish = () =>
+              resolve(
+                new Response(
+                  JSON.stringify({
+                    handoff: { ...handoff.handoff, state: "resumed", generation: 3 },
+                  }),
+                ),
+              );
+          });
+        }
+        return normal(url, options);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      vi.stubGlobal(
+        "WebSocket",
+        class extends EventTarget {
+          close() {}
+        },
+      );
+      mountHandoffLinkPage(document.body, openLink());
+      const page = document.body.firstElementChild!;
+      await waitForFast(() => {
+        const panel = page.shadowRoot?.querySelector("openclaw-human-intervention-panel");
+        expect(
+          panel?.shadowRoot?.querySelector<HTMLButtonElement>("[data-complete]")?.disabled,
+        ).toBe(false);
+      });
+      const panel = page.shadowRoot!.querySelector("openclaw-human-intervention-panel")!;
+      panel.shadowRoot!.querySelector<HTMLButtonElement>("[data-complete]")!.click();
+      await waitForFast(() => expect(finish).toBeTypeOf("function"));
+      expect(close).not.toHaveBeenCalled();
+      finish();
+      await waitForFast(() => expect(close).toHaveBeenCalledOnce());
+      await waitForFast(() =>
+        expect(page.shadowRoot!.querySelector("openclaw-human-intervention-panel")).toBeNull(),
+      );
+      expect(page.shadowRoot!.querySelector(".message-card")?.textContent).toContain(
+        "return to your chat",
+      );
+      expect(page.shadowRoot!.querySelector("button")).toBeNull();
+      expect(location.pathname).toBe("/custom/focus/browser/test");
+    },
+  );
+
   it("waits for a hidden document to become visible before consuming its credential", async () => {
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
     const fetchMock = mockEndpoint();

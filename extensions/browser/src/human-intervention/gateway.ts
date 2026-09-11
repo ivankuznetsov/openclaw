@@ -76,6 +76,9 @@ export function sanitizeAction(value: unknown, targetId: string): Record<string,
     throw new Error("action is required");
   }
   const kind = action.kind;
+  if (kind === "resize") {
+    return normalizeActRequest({ kind, width: action.width, height: action.height, targetId });
+  }
   if (kind === "scroll") {
     return normalizeActRequest({ ...action, kind: "scrollCoords", targetId });
   }
@@ -117,7 +120,7 @@ export function sanitizeAction(value: unknown, targetId: string): Record<string,
     };
   }
   throw new Error(
-    "human browser input supports only clickCoords, dragCoords, scroll, press, insertText, and type",
+    "human browser input supports only clickCoords, dragCoords, scroll, resize, press, insertText, and type",
   );
 }
 

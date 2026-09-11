@@ -306,9 +306,11 @@ describe("batchViaPlaywright", () => {
   });
 
   it("supports resize and close inside a batch", async () => {
+    const assertCurrent = vi.fn();
     const result = await batchViaPlaywright({
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
+      assertCurrent,
       actions: [{ kind: "resize", width: 800, height: 600 }, { kind: "close" }],
     });
 
@@ -318,6 +320,7 @@ describe("batchViaPlaywright", () => {
       targetId: "tab-1",
       width: 800,
       height: 600,
+      assertCurrent,
     });
     expect(closePageViaPlaywright).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:9222",

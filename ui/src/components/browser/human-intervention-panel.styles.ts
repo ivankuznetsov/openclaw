@@ -28,6 +28,30 @@ export const humanInterventionStyles = css`
     grid-template-rows: auto minmax(0, 1fr) auto;
     align-content: stretch;
   }
+
+  .page--message {
+    place-content: center;
+    justify-items: center;
+  }
+  .message-card {
+    display: grid;
+    gap: 20px;
+    width: min(100%, 420px);
+    padding: 28px;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    background: var(--bg-elevated);
+    text-align: center;
+  }
+  .message-card h1 {
+    font-size: 24px;
+    line-height: 1.2;
+  }
+  .message-card p {
+    margin: 0;
+    line-height: 1.5;
+    color: var(--muted);
+  }
   .heading {
     display: flex;
     align-items: center;

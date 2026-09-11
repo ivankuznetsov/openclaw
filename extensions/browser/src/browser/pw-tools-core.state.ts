@@ -50,7 +50,12 @@ async function withPageEmulationCdpClient<T>(params: {
   return await params.run(bindPlaywrightCdpSend(session), session);
 }
 
-export async function setViewportSizeOnPage(page: Page, state: PageState, viewport: DeviceSize) {
+export async function setViewportSizeOnPage(
+  page: Page,
+  state: PageState,
+  viewport: DeviceSize,
+  assertCurrent?: () => void,
+) {
   const emulation = state.emulation;
   if (
     emulation?.metricsOwner &&
@@ -59,9 +64,11 @@ export async function setViewportSizeOnPage(page: Page, state: PageState, viewpo
   ) {
     // Chromium caches metrics per session. Release the device owner before
     // Playwright writes, or reapplying the same device silently skips its DPR/screen.
+    assertCurrent?.();
     await emulation.metricsOwner.session.send("Emulation.clearDeviceMetricsOverride");
     delete emulation.metricsOwner;
   }
+  assertCurrent?.();
   await page.setViewportSize(viewport);
 }
 

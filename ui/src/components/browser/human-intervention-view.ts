@@ -16,7 +16,6 @@ type HumanInterventionPanelView = {
   handoff: HumanInterventionView | null;
   error: string;
   controlling: boolean;
-  statusText: string;
   zoom: number;
   armedTouch: boolean;
   frameUrl: string;
@@ -27,7 +26,7 @@ type HumanInterventionPanelView = {
   claim: () => void;
   complete: () => void;
   cancel: () => void;
-  close: () => void;
+  close?: () => void;
   zoomBy: (delta: number) => void;
   pointerDown: (event: PointerEvent) => void;
   pointerUp: (event: PointerEvent) => void;
@@ -60,6 +59,30 @@ export function renderHumanIntervention(view: HumanInterventionPanelView) {
     view.handoff.state,
   );
   const controlling = view.controlling;
+  const handoffState = view.handoff.state;
+  const statusText = t(
+    handoffState === "control"
+      ? controlling
+        ? "humanBrowser.control"
+        : "humanBrowser.controlElsewhere"
+      : {
+          resume_pending: "humanBrowser.resumePending",
+          resumed: "humanBrowser.continuationQueued",
+          cancelled: "humanBrowser.cancelled",
+          expired: "humanBrowser.expired",
+          waiting: "humanBrowser.waiting",
+        }[handoffState],
+  );
+  if (terminal) {
+    return html`<main class="page page--message">
+      <section class="message-card">
+        <p class="status" role="status">${statusText}</p>
+        ${view.error ? html`<p class="error" role="alert">${view.error}</p>` : nothing}
+        ${view.handoff.state === "resume_pending" ? html`<button data-refresh-status @click=${() => view.retry()}>${t("humanBrowser.refreshStatus")}</button>` : nothing}
+        ${view.close ? html`<button @click=${() => view.close?.()}>${t("common.close")}</button>` : nothing}
+      </section>
+    </main>`;
+  }
   return html`
     <main class=${controlling ? "page page--control" : "page"}>
       <header>
@@ -93,13 +116,12 @@ export function renderHumanIntervention(view: HumanInterventionPanelView) {
             ? html`<details class="context">
                 <summary>${t("humanBrowser.taskDetails")}</summary>
                 ${view.handoff.reason ? html`<p class="reason">${view.handoff.reason}</p>` : nothing}
-                <p class="status">${t("humanBrowser.linkExplanation")}</p>
               </details>`
             : view.handoff.reason
               ? html`<p class="reason">${view.handoff.reason}</p>`
               : nothing
         }
-        <p class=${controlling ? "status sr-only" : "status"} role="status">${view.statusText}</p>
+        <p class=${controlling ? "status sr-only" : "status"} role="status">${statusText}</p>
         ${view.error ? html`<p class="error" role="alert">${view.error}</p>` : nothing}
       </header>
 
@@ -142,37 +164,26 @@ export function renderHumanIntervention(view: HumanInterventionPanelView) {
             `
           : nothing
       }
-      ${
-        !terminal
-          ? html`<div class="actions">
-              ${view.handoff?.state === "waiting" || (view.handoff?.state === "control" && !controlling) ? html`<button class="primary" data-take-control ?disabled=${view.busy} @click=${() => view.claim()}>${t("humanBrowser.takeControl")}</button>` : nothing}
-              ${
-                controlling
-                  ? html`
-                      <button
-                        class="primary"
-                        data-complete
-                        ?disabled=${view.controlsDisabled}
-                        @click=${() => view.complete()}
-                      >
-                        ${t("humanBrowser.done")}
-                      </button>
-                    `
-                  : nothing
-              }
-              <button
-                class="danger"
-                ?disabled=${view.controlsDisabled}
-                @click=${() => view.cancel()}
-              >
-                ${t("humanBrowser.cancel")}
-              </button>
-            </div>`
-          : html`<div class="actions">
-              ${view.handoff.state === "resume_pending" ? html`<button data-refresh-status @click=${() => view.retry()}>${t("humanBrowser.refreshStatus")}</button>` : nothing}
-              <button @click=${() => view.close()}>${t("common.close")}</button>
-            </div>`
-      }
+      <div class="actions">
+        ${view.handoff?.state === "waiting" || (view.handoff?.state === "control" && !controlling) ? html`<button class="primary" data-take-control ?disabled=${view.busy} @click=${() => view.claim()}>${t("humanBrowser.takeControl")}</button>` : nothing}
+        ${
+          controlling
+            ? html`
+                <button
+                  class="primary"
+                  data-complete
+                  ?disabled=${view.controlsDisabled}
+                  @click=${() => view.complete()}
+                >
+                  ${t("humanBrowser.done")}
+                </button>
+              `
+            : nothing
+        }
+        <button class="danger" ?disabled=${view.controlsDisabled} @click=${() => view.cancel()}>
+          ${t("humanBrowser.cancel")}
+        </button>
+      </div>
     </main>
   `;
 }

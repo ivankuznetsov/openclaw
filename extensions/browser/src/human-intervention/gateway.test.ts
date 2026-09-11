@@ -250,6 +250,10 @@ describe("human intervention gateway", () => {
 
   it.each([
     {
+      action: { kind: "resize", width: 390, height: 700, targetId: "other" },
+      expected: { kind: "resize", width: 390, height: 700 },
+    },
+    {
       action: { kind: "scroll", x: 12, y: 24, deltaX: -10, deltaY: 240, targetId: "other" },
       expected: { kind: "scrollCoords", x: 12, y: 24, deltaX: -10, deltaY: 240 },
     },

@@ -218,6 +218,7 @@ async function executeSingleAction(
         width: action.width,
         height: action.height,
         signal,
+        assertCurrent,
       });
       break;
     case "wait":

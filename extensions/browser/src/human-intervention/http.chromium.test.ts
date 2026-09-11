@@ -195,11 +195,18 @@ describe.runIf(process.env.OPENCLAW_BROWSER_HANDOFF_E2E === "1")(
           const assertRejected = async (body: unknown, handoffId = id) => {
             const beforeDispatch = dispatched;
             const beforeText = await page.locator("button").textContent();
-            const beforeScroll = await page.evaluate(() => [scrollX, scrollY]);
+            const beforeGeometry = await page.evaluate(() => [
+              scrollX,
+              scrollY,
+              innerWidth,
+              innerHeight,
+            ]);
             expect((await post(body, handoffId)).status).toBe(403);
             expect(dispatched).toBe(beforeDispatch);
             expect(await page.locator("button").textContent()).toBe(beforeText);
-            expect(await page.evaluate(() => [scrollX, scrollY])).toEqual(beforeScroll);
+            expect(await page.evaluate(() => [scrollX, scrollY, innerWidth, innerHeight])).toEqual(
+              beforeGeometry,
+            );
           };
           const other = await coordinator.service.request({
             ...pending.record,
@@ -238,6 +245,23 @@ describe.runIf(process.env.OPENCLAW_BROWSER_HANDOFF_E2E === "1")(
           await assertRejected({ ...click, operation: "navigate", url: "https://example.com" });
           await assertRejected({ action: "config.set", value: "forbidden" });
 
+          const resize = {
+            ...click,
+            input: {
+              kind: "resize",
+              width: 390,
+              height: 700,
+              targetId: otherTarget.targetInfo.targetId,
+            },
+          };
+          await assertRejected(resize, other.id);
+          await assertRejected({ ...resize, input: { ...resize.input, width: 8193 } });
+          const otherViewport = await otherPage.evaluate(() => [innerWidth, innerHeight]);
+          expect((await post(resize)).status).toBe(200);
+          expect(await page.evaluate(() => [innerWidth, innerHeight])).toEqual([390, 700]);
+          expect(await page.evaluate(() => matchMedia("(max-width: 400px)").matches)).toBe(true);
+          expect(await otherPage.evaluate(() => [innerWidth, innerHeight])).toEqual(otherViewport);
+
           // Recreate runtime owners after closing actual SQLite connections. The
           // active browser survives, as it does across a plugin/Gateway reconnect.
           const reopen = async () => {
@@ -268,6 +292,8 @@ describe.runIf(process.env.OPENCLAW_BROWSER_HANDOFF_E2E === "1")(
           ).toBe(403);
           expect(await coordinator.service.get(id)).toMatchObject({ state: "resume_pending" });
           await assertRejected(currentClick);
+          await assertRejected({ ...resize, generation: reclaimed.generation });
+          expect(await page.evaluate(() => [innerWidth, innerHeight])).toEqual([390, 700]);
           expect(admitted).toHaveLength(0);
 
           rejectAdmission = false;

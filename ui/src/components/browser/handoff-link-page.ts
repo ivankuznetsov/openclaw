@@ -15,6 +15,7 @@ class HandoffLinkPage extends OpenClawLitElement {
   @state() private client: HandoffHttpClient | null = null;
   @state() private busy = false;
   @state() private error = "";
+  @state() private completed = false;
   static override styles = [
     humanInterventionStyles,
     css`
@@ -70,29 +71,48 @@ class HandoffLinkPage extends OpenClawLitElement {
     }
   }
 
+  private readonly complete = () => {
+    this.completed = true;
+    try {
+      window.close();
+    } catch {
+      // Some browsers refuse to close externally opened tabs; keep a safe status.
+    }
+  };
+
   override render() {
+    if (this.completed) {
+      return html`<main class="page page--message">
+        <section class="message-card">
+          <p role="status">${t("humanBrowser.continuationQueued")}</p>
+        </section>
+      </main>`;
+    }
     if (this.client) {
       return html`<openclaw-human-intervention-panel
         .client=${this.client}
         .handoffId=${this.access.id}
         .available=${true}
         .autoClaim=${true}
+        .onCompleted=${this.complete}
       ></openclaw-human-intervention-panel>`;
     }
-    return html`<main class="page">
-      <h1>${t("humanBrowser.title")}</h1>
-      ${
-        this.error
-          ? html`<p role="alert">${this.error}</p>
-              <button
-                class="primary"
-                ?disabled=${this.busy}
-                @click=${() => void this.takeControl()}
-              >
-                ${t("humanBrowser.retry")}
-              </button>`
-          : html`<p role="status">${t("humanBrowser.browserLoading")}</p>`
-      }
+    return html`<main class="page page--message">
+      <section class="message-card">
+        <h1>${t("humanBrowser.title")}</h1>
+        ${
+          this.error
+            ? html`<p role="alert">${this.error}</p>
+                <button
+                  class="primary"
+                  ?disabled=${this.busy}
+                  @click=${() => void this.takeControl()}
+                >
+                  ${t("humanBrowser.retry")}
+                </button>`
+            : html`<p role="status">${t("humanBrowser.browserLoading")}</p>`
+        }
+      </section>
     </main>`;
   }
 }

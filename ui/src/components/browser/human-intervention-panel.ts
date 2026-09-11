@@ -47,6 +47,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   @property() handoffId = "";
   @property({ type: Boolean }) autoClaim = false;
   @property({ attribute: false }) onDocumentClose?: () => void;
+  @property({ attribute: false }) onCompleted?: () => void;
 
   @state() private handoff: HumanInterventionView | null = null;
   @state() private loading = true;
@@ -60,6 +61,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
   @state() private zoom = 1;
 
   private connection: ViewerConnection | null = null;
+  private completedConnection: ViewerConnection | null = null;
   private readonly pointerGesture = new HumanBrowserPointerGesture();
   private pendingScroll?: { action: HumanBrowserScroll; session: ControlSession; epoch: number };
   private scrollEpoch = 0;
@@ -155,6 +157,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
     } finally {
       if (this.isCurrent(connection)) {
         this.loading = false;
+        this.notifyCompleted(connection);
       }
     }
   }
@@ -203,6 +206,24 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
       }
       this.handoff = response.handoff;
       this.control = session;
+      this.loading = false;
+      await this.updateComplete;
+      if (!this.ownsControl(session)) {
+        return;
+      }
+      const viewer = this.shadowRoot?.querySelector<HTMLElement>(".viewer");
+      const width = Math.min(8192, Math.floor(viewer?.clientWidth ?? 0));
+      const height = Math.min(8192, Math.floor(viewer?.clientHeight ?? 0));
+      if (width > 0 && height > 0) {
+        await connection.client.request("browser.handoff.browser", {
+          ...this.controlParams(session),
+          operation: "act",
+          action: { kind: "resize", width, height },
+        });
+      }
+      if (!this.ownsControl(session)) {
+        return;
+      }
       await this.startStream(session);
       if (this.ownsControl(session)) {
         const activeSession = session;
@@ -635,10 +656,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
     this.error = "";
     try {
       await session?.inputOperation;
-      if (!this.isCurrent(connection)) {
-        return;
-      }
-      if (session && !this.ownsControl(session)) {
+      if (!this.isCurrent(connection) || (session && !this.ownsControl(session))) {
         return;
       }
       const params =
@@ -676,24 +694,17 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
     } finally {
       if (this.isCurrent(connection)) {
         this.busy = false;
+        this.notifyCompleted(connection);
       }
     }
   }
 
-  private statusText(): string {
-    const handoffState = this.handoff?.state ?? "waiting";
-    if (handoffState === "control") {
-      return t(this.isController() ? "humanBrowser.control" : "humanBrowser.controlElsewhere");
+  private notifyCompleted(connection: ViewerConnection): void {
+    // Both callers have revalidated this connection after their awaited work.
+    if (this.handoff?.state === "resumed" && this.completedConnection !== connection) {
+      this.completedConnection = connection;
+      (this.onCompleted ?? this.onDocumentClose)?.();
     }
-    return t(
-      {
-        resume_pending: "humanBrowser.resumePending",
-        resumed: "humanBrowser.continuationQueued",
-        cancelled: "humanBrowser.cancelled",
-        expired: "humanBrowser.expired",
-        waiting: "humanBrowser.waiting",
-      }[handoffState],
-    );
   }
 
   override render() {
@@ -703,7 +714,6 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
       handoff: this.handoff,
       error: this.error,
       controlling: this.isController(),
-      statusText: this.statusText(),
       zoom: this.zoom,
       armedTouch: Boolean(this.armedTouch),
       frameUrl: this.frameUrl,
@@ -714,7 +724,7 @@ export class OpenClawHumanInterventionPanel extends OpenClawLitElement {
       claim: () => void this.claim(),
       complete: () => void this.finish("browser.handoff.complete"),
       cancel: () => void this.finish("browser.handoff.cancel"),
-      close: () => this.onDocumentClose?.(),
+      close: this.onDocumentClose,
       zoomBy: (delta) => {
         this.zoom = Math.max(1, Math.min(3, this.zoom + delta));
       },

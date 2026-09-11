@@ -85,7 +85,10 @@ async function mountPanel(client: GatewayBrowserClient) {
   panel.available = true;
   panel.handoffId = "handoff-1";
   document.body.append(panel);
-  await waitForFast(() => expect(panel.shadowRoot?.textContent).toContain("accounts.example"));
+  await waitForFast(() => {
+    expect(panel.shadowRoot?.querySelector("main")).not.toBeNull();
+    expect(panel.shadowRoot?.textContent).not.toContain("Loading browser handoff");
+  });
   return panel;
 }
 
@@ -212,6 +215,8 @@ describe("human browser intervention panel", () => {
     stubWebSockets();
     const { client, request } = createClient();
     const panel = await mountPanel(client);
+    const close = vi.fn();
+    panel.onDocumentClose = close;
     panel.shadowRoot?.querySelector<HTMLButtonElement>("[data-take-control]")?.click();
     await waitForFast(() =>
       expect(panel.shadowRoot?.querySelector("[data-complete]")).not.toBeNull(),
@@ -236,6 +241,7 @@ describe("human browser intervention panel", () => {
     });
     expect(panel.shadowRoot?.textContent).toContain("return to your chat");
     expect(panel.shadowRoot?.querySelector("[data-complete]")).toBeNull();
+    expect(close).toHaveBeenCalledOnce();
   });
 
   it("uses a new controller identity after the authenticated connection changes", async () => {
@@ -274,6 +280,90 @@ describe("human browser intervention panel", () => {
         { width: 1000, height: 800 },
       ),
     ).toEqual({ x: 500, y: 400 });
+  });
+
+  it.each(["resumed", "resume_pending"] as const)(
+    "closes the embedded document only after authoritative %s completion",
+    async (state) => {
+      const { panel, request } = await mountReadyPanel();
+      const close = vi.fn();
+      panel.onDocumentClose = close;
+      let finish!: (response: HumanInterventionResponse) => void;
+      request.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+      panel.shadowRoot!.querySelector<HTMLButtonElement>("[data-complete]")!.click();
+      await waitForFast(() => expect(finish).toBeTypeOf("function"));
+      expect(close).not.toHaveBeenCalled();
+      finish(handoff(state, 3));
+      await waitForFast(() =>
+        expect(panel.shadowRoot!.querySelector("[data-complete]")).toBeNull(),
+      );
+      expect(close).toHaveBeenCalledTimes(state === "resumed" ? 1 : 0);
+    },
+  );
+
+  it("fits the remote viewport once before opening its screencast", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(
+      function (this: HTMLElement) {
+        return this.classList.contains("viewer") ? 390 : 0;
+      },
+    );
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(
+      function (this: HTMLElement) {
+        return this.classList.contains("viewer") ? 600 : 0;
+      },
+    );
+    const { request, panel } = await mountReadyPanel();
+    const browserCalls = request.mock.calls
+      .filter(([method]) => method === "browser.handoff.browser")
+      .map((call) => call[1]);
+    expect(browserCalls).toEqual([
+      expect.objectContaining({
+        operation: "act",
+        action: { kind: "resize", width: 390, height: 600 },
+      }),
+      expect.objectContaining({ operation: "screencast" }),
+    ]);
+    window.dispatchEvent(new Event("resize"));
+    await panel.updateComplete;
+    expect(
+      request.mock.calls.filter(([method]) => method === "browser.handoff.browser"),
+    ).toHaveLength(2);
+  });
+
+  it("does not open a stream after the viewer closes during initial viewport fitting", async () => {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(390);
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(600);
+    stubWebSockets();
+    const { client, request } = createClient();
+    const panel = await mountPanel(client);
+    let finishResize!: () => void;
+    const normal = request.getMockImplementation()!;
+    request.mockImplementation((method, params) => {
+      if (method === "browser.handoff.browser") {
+        return new Promise((resolve) => {
+          finishResize = () => resolve({ ok: true });
+        });
+      }
+      return normal(method, params);
+    });
+    panel.shadowRoot!.querySelector<HTMLButtonElement>("[data-take-control]")!.click();
+    await waitForFast(() => expect(finishResize).toBeTypeOf("function"));
+    panel.remove();
+    finishResize();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
+    const browserCalls = request.mock.calls
+      .filter(([method]) => method === "browser.handoff.browser")
+      .map((call) => call[1]);
+    expect(browserCalls).toEqual([
+      expect.objectContaining({ action: { kind: "resize", width: 390, height: 600 } }),
+    ]);
   });
 
   it("claims the exact handoff, opens its scoped stream, and completes with the lease fence", async () => {
@@ -418,6 +508,8 @@ describe("human browser intervention panel", () => {
 
   it("retires control and shows pending continuation after ambiguous completion failure", async () => {
     const { panel, request } = await mountReadyPanel();
+    const close = vi.fn();
+    panel.onDocumentClose = close;
     request.mockRejectedValueOnce(new Error("scheduler admission failed"));
     request.mockResolvedValueOnce(handoff("resume_pending", 3));
     panel.shadowRoot!.querySelector<HTMLButtonElement>("[data-complete]")!.click();
@@ -427,6 +519,10 @@ describe("human browser intervention panel", () => {
     expect(panel.shadowRoot!.querySelector(".frame")).toBeNull();
     expect(panel.shadowRoot!.querySelector("[data-complete]")).toBeNull();
     expect(panel.shadowRoot!.textContent).toContain("scheduler admission failed");
+    expect(close).not.toHaveBeenCalled();
+    request.mockResolvedValueOnce(handoff("resumed", 3));
+    panel.shadowRoot!.querySelector<HTMLButtonElement>("[data-refresh-status]")!.click();
+    await waitForFast(() => expect(close).toHaveBeenCalledOnce());
   });
 
   it("opens the canvas keyboard only after the remote tab reports editable focus", async () => {
