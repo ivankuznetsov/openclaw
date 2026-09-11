@@ -45,3 +45,32 @@ A fresh browser context opened a missing-credential handoff URL directly to the 
 The operator will record the actual Telegram/Android flow. Valid cross-device redemption, native keyboard activation, human completion, and continuation in the original chat remain pending that recording. Telegram Test Server E2E remains unavailable without its required leased credentials and tooling.
 
 Security-owner review of first-redeemer bearer links remains separate from this proof. Browser typed lint, live Gateway restart recovery, and real screencast revocation also remain outstanding. This report does not declare the PR merge-ready.
+
+## Follow-up: viewport fitting and completion
+
+Candidate `be78a14431cfdf949430ff5a50a9fec5fa35ec6f` resizes the bound browser tab to the available viewer workspace before streaming. This changes the page's real viewport so responsive content fills the available area without stretching or cropping. Opening the phone keyboard does not resize the remote page. Task details show only the handoff reason, and errors use a centered, themed presentation.
+
+The viewer attempts to close only after a confirmed `resumed` response, which means continuation was admitted to the queue. Pending or failed admission keeps the viewer open. If closing is blocked, one brief status remains without another button.
+
+125 focused tests passed: 80 backend and 45 UI. Real Chromium proof covers viewport changes, responsive media queries, other-tab isolation, invalid dimensions, and revoked resize authority. Browser/UI production and changed-test types, styles, formatting, static guards, and i18n checks passed; scoped independent autoreview was clean.
+
+UI typed lint completed with one new-test Promise-executor return finding. The finding was repaired and a focused syntax-rule check passed; a repeated full typed-lint pass is not claimed. Browser typed lint again stopped before lint execution because SDK declaration preparation exceeded its 300-second deadline. No rules, declaration boundary, or timeout were weakened.
+
+The built-viewer smoke passed with mocked HTTP/WebSocket handling and a real browser fixture resized to the requested dimensions:
+
+| Phone viewport | Remote fixture viewport |
+| -------------- | ----------------------- |
+| 390 × 844      | 376 × 707 CSS pixels    |
+| 360 × 800      | 346 × 663 CSS pixels    |
+
+At 390 pixels, emulated swiping, pinch zoom without a trailing tap, mapped text-field focus, completion, and a simulated blocked `window.close` passed. Six synthetic captures were inspected, including both viewport sizes, task details, text-entry guidance, completion, and an expired link. This proves the built presentation and gesture mapping; the mocked transport does not prove live Gateway screencast authority or actual browser close permission.
+
+The full package build and tarball integrity/import-graph checks passed. Package SHA-256: `7ee978acad0e5fe5fc19f983843684cfb4a94d66d33374b26f680cdc6c54ff4a`.
+
+The later installation runs code `be78a14431cfdf949430ff5a50a9fec5fa35ec6f`, build `2026.9.3-be78a14431cf-2026-09-11T09-07-03.288Z`. All 10,411 package entries matched, apart from the expected consumed lifecycle marker. The served UI identity and entry-script bytes matched the installed package. Native Doctor exited successfully and normalized the cron store. Final Gateway health passed, with Telegram configured and running. The initial health probe ran before the listener opened and received a connection refusal; subsequent readiness verification passed.
+
+A native backup was verified on the third attempt; two earlier attempts exceeded a five-second lease budget under host I/O pressure. During this installation, the previous Gateway reached its 315-second drain limit with three tasks still active, followed by a 10-second cleanup timeout. Systemd ultimately reported SIGKILL and a signal result. This was not a clean shutdown and does not prove those tasks drained or survived restart.
+
+A fresh browser context again showed invalid-link guidance for a missing-credential handoff URL without opening a Gateway WebSocket. The Gateway root still required its normal token. Six inspected captures are ready in Screenote snapshot 35.
+
+Native Android keyboard and closing behavior, the actual Telegram task-to-continuation recording, Telegram Test Server E2E, and the previously documented bearer-ownership and lifecycle proof gaps remain outstanding. This addendum does not declare the PR merge-ready.
