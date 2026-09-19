@@ -437,8 +437,9 @@ Camera commands (foreground only; permission-gated): `camera.snap` (jpg), `camer
 - Navigate through the sidebar's **Pages** menu. Voice input belongs to the Chat
   composer; there is no separate Voice tab.
 - Tap the composer microphone for on-device speech recognition that inserts a
-  transcript into the draft. While listening, a waveform replaces the microphone;
-  tap it to stop dictation. Long-press the microphone to open **Voice options**,
+  transcript into the draft. While listening, a Stop icon replaces the microphone;
+  tap it to finish listening. While starting or transcribing, a Close icon cancels
+  that attempt. Long-press the microphone to open **Voice options**,
   then choose **Record voice note** to create an attachment. The UI reports
   unavailable recognition, missing permission,
   busy/network failures, and no-speech outcomes instead of silently dropping
