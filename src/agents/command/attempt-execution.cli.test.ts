@@ -26,6 +26,7 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -36,6 +37,10 @@ import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db
 import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createTestPreparedRunAdmission } from "../admitted-run-context.test-support.js";
@@ -990,6 +995,24 @@ describe("CLI attempt execution", () => {
     "live model switch",
     "canonical override repair",
   ] as const)("retains CLI image capability after a thinking-off %s", async (transition) => {
+    // This route tests CLI image capability, not bundled message-action discovery.
+    if (transition === "implicit configured primary") {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "discord",
+            source: "test",
+            plugin: {
+              ...createChannelTestPluginBase({
+                id: "discord",
+                capabilities: { chatTypes: ["group", "channel"] },
+              }),
+              actions: { describeMessageTool: () => ({ actions: ["send"] }) },
+            },
+          },
+        ]),
+      );
+    }
     const canonicalRepair = transition === "canonical override repair";
     const model = canonicalRepair ? "custom/child" : "claude-sonnet-4-6";
     const modelRef = `anthropic/${model}`;
