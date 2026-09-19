@@ -33,11 +33,25 @@ producers, observes the effective child attempts, and writes the final all-group
 the planned and effective attempt, accepted attempt for every logical job, and
 a digest of the composite job evidence.
 
-Parent recovery follows the original artifact producer attempts without rerunning
-them. If a producer failed or its recorded attempt changed, start a fresh
-all-group validation. Lost or expired original dispatch records and receipts also
-require fresh validation. This applies to npm qualification, Docker preparation,
-and candidate preparation.
+Npm qualification participates in the same failed-job recovery: the controller
+retries its failed jobs on the original producer run, without rerunning
+successful diagnostic children.
+It waits for active attempts and diagnostic drain, adopts verified newer
+npm producer attempts, then reruns the parent collector once. Successful package
+preparation jobs and their exact artifact descriptors carry forward; a retry
+must not substitute rebuilt bytes for the candidate already tested.
+
+The parent authenticates the original dispatch identity and the latest successful
+producer receipt. Package and qualification jobs can come from different attempts;
+each must remain the effective successful job in that run's attempt history.
+Changed source, tooling, dispatch identity, superseded jobs, missing evidence,
+and expired receipts remain errors, not reasons to trust stale evidence.
+
+A failed npm producer is a retry target, not a reason to reject continuation.
+The controller uses GitHub's failed-job rerun operation on the same run, then
+collects its result. Frozen workflows still execute their original code:
+upgrading the local controller does not retrofit receipt adoption into an older
+workflow. Final verification must pass before recovery is reported successful.
 
 Each child or parent rerun mutation is sent exactly once. If GitHub returns an
 ambiguous transient error, the controller performs read-only reconciliation
@@ -82,7 +96,87 @@ not declare the current release-isolation contract or the `expected_sha`
 dispatch input; it never silently substitutes newer tooling. The workflow never
 creates or updates repository refs itself.
 
+### Read publication observations
+
+An optional publication selector adds a read-only view beside validation status:
+
+```bash
+pnpm frv status --run <parent-run-id> --publication-run <publish-parent-run-id>
+pnpm frv status --run <parent-run-id> --publication-run <publish-parent-run-id> --json
+```
+
+The JSON response retains the validation fields and adds `publication`. The
+selector is valid only on `status`; it does not change `continue` or `verify`.
+The FRV root still needs an attempt-aware, all-group immutable plan.
+
+The reader pins the publication attempt observed at entry. It authenticates the
+FRV and publication workflow identities independently, then joins supported
+`release-postpublish-diagnostics` version 1 evidence to the exact validation
+manifest recorded by that publisher. An original plan from attempt 1 can bind a
+final validation manifest from attempt 2. The two attempts are reported
+separately; neither is silently replaced with the latest attempt.
+Linked children retain their own observed tooling SHA/ref. The recorded normal
+ClawHub ref can differ from an alpha publisher's ref.
+
+This view reports observations, **not release authorization or current registry
+visibility**. Writer selection, verification selection, job conclusions,
+registry readback, binding and asset checks remain separate. Failed publishers
+can retain successful readback and partial package results. Docker and VCR
+remain parent jobs; VCR copy, smoke and alias values are API step conclusions.
+Detached Windows acknowledgement, its pre-upload marker and the current child
+conclusion are separate observations. The normal ClawHub dispatch record is not
+a complete child inventory.
+
+Prepared-release activation remains unknown without an authenticated link to
+its external owner. A successful inner publisher or skipped finalize job does
+not prove activation. Supplied historical child IDs retain unknown recorded
+attempts where the diagnostic lacks them. Legacy success receipts without an
+exact publisher attempt, unsupported schemas and absent diagnostics do not
+become success by inference. The protected publication ref need not still
+exist for this historical observation; live privileged writers must still
+perform their own final authority checks.
+
+Exit 0 means collection completed, not that publication passed. Missing or
+expired historical evidence can produce exit 0 with an explicit unverified
+relationship. Contradictory identities, access/transport errors, incomplete
+pagination, truncated diagnostics and changing attempts produce exit 1 with
+classified partial output. There is no automatic restart or recovery action.
+An unrelated child failure leaves an already authenticated publisher/validation
+link verified while marking collection incomplete, provided final parent
+identity checks still pass. Changes to either joined parent invalidate that
+relationship; an unreadable final parent makes it unverified. These checks
+also run after a collection failure, within the original read budget.
+Final checks bind immutable run/workflow/repository/ref/SHA identity and attempt.
+Same-attempt lifecycle or display changes do not invalidate that relationship;
+reported lifecycle values remain observations from their individual reads.
+
+Reads use the selected GitHub CLI credential route, explicit authenticated
+GETs, exact artifact metadata/digests and bounded ZIP inspection. Limits are
+three minutes overall, twenty seconds per request, 256 requests, 32 observed
+runs, eight attempts per validation child, ten pages of 100 records, 2 MiB per
+JSON response/archive, 1 MiB per expanded artifact (128 KiB for diagnostics),
+32 MiB cumulative response bytes and 256 KiB output. A limit is an incomplete
+observation, never proof of absence. If output is oversized, the reader retains
+authenticated publisher/validation linkage and surface observations, limits each
+job/package list to four entries with explicit omission counts, and marks any
+omitted validation detail. It does not replace known results with unknowns.
+No registry reads, candidate execution, reruns, dispatches or release mutations
+occur.
+
 ### Post-merge continuation proof
+
+For a registry-admitted publish parent, continuation authenticates the original
+attempt-one plan and its successful guarded upload before any rerun or dispatch.
+The retry restores cached bytes against the digest recorded after the original
+guarded upload, then re-uploads the same plan and admission for its consumers.
+It does not recollect public registry state, restamp admission time, or replace
+the observation artifact descriptor embedded in the admission. Historical
+registry-admitted parents without the digest-witness contract cannot continue;
+the controller refuses before rerunning children or the parent. Their surviving
+artifacts remain readable for strict verification. Updating the local controller
+cannot retrofit their frozen workflow. Historical parents keep their exact frozen contract;
+nonpublish parents carry no publication admission. Existing refusals for
+parent-owned artifacts and incomplete child identities still apply.
 
 Use the non-release `FRV Proof Broker` and `FRV Proof Fixture` workflows only
 after the reviewed SHA lands on protected `main`. The fixture contains one

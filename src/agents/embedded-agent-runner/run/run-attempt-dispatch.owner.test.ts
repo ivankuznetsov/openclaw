@@ -1,19 +1,32 @@
-import { afterEach, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../../plugins/runtime.js";
+import { buildSkillSnapshot } from "../../../skills/loading/workspace-skill-prompt.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../admitted-run-context.js";
+import { resolveSessionGitCoauthorPrompt } from "../../git-coauthor-prompt.js";
 import { registerAgentHarness } from "../../harness/registry.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { registerSandboxBackend } from "../../sandbox/backend.js";
 import { createSandboxTestContext } from "../../sandbox/test-fixtures.js";
 import { installSessionPlacementAdmissionProvider } from "../../session-placement-admission.js";
+import * as workspaceSandbox from "../../workspace-sandbox.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
+
+vi.mock("../../git-coauthor-prompt.js", () => ({
+  resolveSessionGitCoauthorPrompt: vi.fn(),
+}));
+
+beforeEach(() => {
+  vi.mocked(resolveSessionGitCoauthorPrompt).mockReset();
+});
 
 vi.mock("../../runtime-plan/build.js", () => ({
   buildAgentRuntimePlan: ({
@@ -30,19 +43,73 @@ vi.mock("../../runtime-plan/build.js", () => ({
 afterEach(() => setActivePluginRegistry(createEmptyPluginRegistry()));
 
 it.each([
-  { agentId: "main", sandboxSessionKey: undefined, remoteSkills: false, oneShotCliRun: undefined },
-  { agentId: "work", sandboxSessionKey: "global", remoteSkills: false, oneShotCliRun: true },
+  {
+    agentId: "main",
+    sandboxSessionKey: undefined,
+    remoteSkills: false,
+    skillCatalog: "host" as const,
+    oneShotCliRun: undefined,
+  },
+  {
+    agentId: "work",
+    sandboxSessionKey: "global",
+    remoteSkills: false,
+    skillCatalog: "sandbox" as const,
+    oneShotCliRun: true,
+  },
   {
     agentId: "work",
     sandboxSessionKey: "agent:main:policy",
     remoteSkills: false,
+    skillCatalog: "none" as const,
     oneShotCliRun: false,
   },
-  { agentId: "main", sandboxSessionKey: undefined, remoteSkills: true, oneShotCliRun: true },
+  {
+    agentId: "main",
+    sandboxSessionKey: undefined,
+    remoteSkills: true,
+    skillCatalog: "none" as const,
+    oneShotCliRun: true,
+  },
+  {
+    agentId: "work",
+    sandboxSessionKey: undefined,
+    remoteSkills: false,
+    skillCatalog: "none" as const,
+    oneShotCliRun: false,
+    managedWorkspace: true,
+  },
+  {
+    agentId: "work",
+    sandboxSessionKey: undefined,
+    remoteSkills: true,
+    skillCatalog: "none" as const,
+    oneShotCliRun: false,
+    managedWorkspace: true,
+  },
 ])(
-  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, remote skills $remoteSkills, and one-shot $oneShotCliRun",
-  async ({ agentId, sandboxSessionKey, remoteSkills, oneShotCliRun }) => {
+  "dispatches the generic harness for $agentId/global with policy $sandboxSessionKey, $skillCatalog skills, remote skills $remoteSkills, and one-shot $oneShotCliRun",
+  async ({
+    agentId,
+    sandboxSessionKey,
+    remoteSkills,
+    skillCatalog,
+    oneShotCliRun,
+    managedWorkspace,
+  }) => {
+    const gitCoauthorPrompt =
+      "Git co-authors: add these exact trailers to every commit you make from this session.\n" +
+      "Co-authored-by: ada <20+ada@users.noreply.github.com>";
+    vi.mocked(resolveSessionGitCoauthorPrompt).mockReturnValue(gitCoauthorPrompt);
     await withOpenClawTestState({ label: "harness-owner" }, async (state) => {
+      const skillDir = path.join(state.workspaceDir, "skills", "demo");
+      if (skillCatalog !== "none") {
+        await fs.mkdir(skillDir, { recursive: true });
+        await fs.writeFile(
+          path.join(skillDir, "SKILL.md"),
+          "---\nname: demo\ndescription: Demo skill\n---\n\n# Demo\n",
+        );
+      }
       const config = {
         agents: {
           ownership: "explicit" as const,
@@ -53,6 +120,7 @@ it.each([
               mode: "off" as const,
               backend: "owner-fixture",
               scope: "agent" as const,
+              workspaceAccess: skillCatalog === "sandbox" ? ("rw" as const) : ("none" as const),
               workspaceRoot: state.path("sandbox"),
               prune: { idleHours: 0, maxAgeDays: 0 },
             },
@@ -111,6 +179,14 @@ it.each([
         runAttempt,
       });
       const runtimePluginToolGrant = { pluginId: "owner-tools", toolNames: ["owner_only"] };
+      const skillsSnapshot =
+        skillCatalog === "none"
+          ? undefined
+          : await buildSkillSnapshot(state.workspaceDir, {
+              agentId,
+              bundledSkillsDir: state.path("missing-bundled-skills"),
+              managedSkillsDir: state.path("missing-managed-skills"),
+            });
       const params = {
         admittedRunContext,
         agentId,
@@ -120,8 +196,16 @@ it.each([
         sessionKey: "global",
         sandboxSessionKey,
         workspaceDir: state.workspaceDir,
+        ...(managedWorkspace
+          ? {
+              cwd: state.workspaceDir,
+              sessionRoot: state.workspaceDir,
+              permissionMode: "guarded" as const,
+            }
+          : {}),
         sessionFile: "global",
         prompt: remoteSkills ? "Use the skill at /host/skills/demo/SKILL.md." : "hello",
+        ...(skillsSnapshot ? { skillsSnapshot } : {}),
         ...(remoteSkills
           ? {
               explicitSkillSelections: [
@@ -237,19 +321,63 @@ it.each([
         executeTurn: async (_claim, _params, runLocal) => runLocal(),
         ...sandboxProvider,
       });
+      const projection = state.path("managed-projection");
+      const projectedSandbox = createSandboxTestContext({
+        overrides: {
+          workspaceSource: "managed-worktree",
+          required: true,
+          workspaceAccess: "rw",
+          workspaceDir: projection,
+          agentWorkspaceDir: projection,
+        },
+      });
+      const preparation = managedWorkspace
+        ? vi.spyOn(workspaceSandbox, "resolveAttemptWorkspaceSandbox").mockResolvedValue({
+            effectiveCwd: projection,
+            effectiveWorkspace: projection,
+            resolvedWorkspace: state.workspaceDir,
+            effectiveFsWorkspaceOnly: true,
+            sessionPermissionRoot: projection,
+            sessionPermissionPolicy: { root: projection, mode: "guarded" },
+            sandbox: projectedSandbox,
+            sandboxSessionKey: "global",
+            sessionAgentId: agentId,
+          })
+        : undefined;
       try {
         const { dispatchedAttempt: result } = await prepareAndDispatchEmbeddedRunAttempt(input);
         expect(result.rawAttempt.terminal).toEqual({ kind: "ok" });
         expect(result.rawAttempt.assistantTexts).toEqual([`${agentId} answered`]);
         expect(runAttempt).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ agentId, sessionKey: "global", sandboxSessionKey }),
+          expect.objectContaining({
+            agentId,
+            sessionKey: "global",
+            sandboxSessionKey,
+            gitCoauthorPrompt,
+          }),
         );
+        expect(resolveSessionGitCoauthorPrompt).toHaveBeenCalledExactlyOnceWith({
+          config,
+          agentId,
+          sessionKey: "global",
+          storePath: undefined,
+        });
         expect.soft(runAttempt.mock.calls[0]?.[0].oneShotCliRun).toBe(oneShotCliRun);
         expect
           .soft(runAttempt.mock.calls[0]?.[0].runtimePluginToolGrant)
           .toBe(runtimePluginToolGrant);
         const sandbox = runAttempt.mock.calls[0]?.[0].sandbox;
-        if (remoteSkills) {
+        if (managedWorkspace && !remoteSkills) {
+          expect(preparation).toHaveBeenCalledWith(expect.objectContaining({ admittedRunContext }));
+          expect(runAttempt.mock.calls[0]?.[0]).toMatchObject({
+            workspaceDir: projection,
+            cwd: projection,
+            sessionRoot: projection,
+            permissionMode: "guarded",
+            sandbox: projectedSandbox,
+          });
+          expect(params.workspaceDir).toBe(state.workspaceDir);
+        } else if (remoteSkills) {
           const dispatched = runAttempt.mock.calls[0]?.[0];
           expect(dispatched?.prompt).toBe("Use the skill at /remote/inbound/0/SKILL.md.");
           expect(dispatched?.explicitSkillSelections).toEqual([
@@ -258,6 +386,23 @@ it.each([
           ]);
           expect(params.explicitSkillSelections?.[0]?.path).toBe("/host/skills/demo/SKILL.md");
           expect(sandbox).toEqual(remoteSandbox);
+          expect(dispatched?.workspaceDir).toBe(state.workspaceDir);
+          if (managedWorkspace) {
+            expect(dispatched?.cwd).toBe(state.workspaceDir);
+            expect(dispatched?.sessionRoot).toBe(state.workspaceDir);
+          }
+        } else if (skillCatalog === "sandbox") {
+          const dispatched = runAttempt.mock.calls[0]?.[0];
+          const sandboxSkillPath = "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md";
+          expect(dispatched?.skillsSnapshot?.prompt).toContain(
+            `<location>${sandboxSkillPath}</location>`,
+          );
+          expect(dispatched?.skillsSnapshot?.prompt).not.toContain(path.join(skillDir, "SKILL.md"));
+          expect(params.skillsSnapshot?.prompt).toBe(skillsSnapshot?.prompt);
+          expect(sandbox?.workspaceAccess).toBe("rw");
+        } else if (skillCatalog === "host") {
+          expect(runAttempt.mock.calls[0]?.[0].skillsSnapshot?.prompt).toBe(skillsSnapshot?.prompt);
+          expect(sandbox).toBeNull();
         } else if (agentId === "work" && sandboxSessionKey === "global") {
           expect(provisioned).toHaveLength(1);
           expect(provisioned[0]).toMatch(/^agent:work:workspace:/);
@@ -268,6 +413,7 @@ it.each([
           expect(sandbox).toBeNull();
         }
       } finally {
+        preparation?.mockRestore();
         restorePlacement();
         admission.close();
         restoreSandbox();

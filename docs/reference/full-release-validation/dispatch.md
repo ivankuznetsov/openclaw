@@ -30,16 +30,108 @@ as the **Tooling SHA/ref**, then run:
 
 ```bash
 TOOLING_SHA="<recorded-full-main-ancestor-sha>"
+PUBLICATION_SELECTION='{"route":"normal","npmDistTag":"latest","publishOpenclawNpm":true,"pluginPublishScope":"all-publishable","plugins":[]}'
 pnpm ci:full-release \
   --sha <code-sha> \
   --target-ref release/YYYY.M.PATCH \
-  --workflow-sha "$TOOLING_SHA"
+  --workflow-sha "$TOOLING_SHA" \
+  -f validation_purpose=publish \
+  -f publication_selection_json="$PUBLICATION_SELECTION"
 ```
+
+This example selects normal final-release publication. Select `npmDistTag=beta`
+for a beta, or `route=prepared` when the intended consumer is the prepared release
+button. Core publication requires `all-publishable` plugins. Plugin-only normal
+publication can set `publishOpenclawNpm=false`, `pluginPublishScope=selected`,
+and explicit canonical package names in `plugins`.
+
+Every fresh run requires an explicit `validation_purpose`. `publish` verifies
+complete committed source metadata before projecting the requested publication
+selection and before resolution can release any selected producer. Its retained
+source-admission fact is **source-only**, not registry eligibility, product-test
+success, or publication authority. `diagnostic`, `main-qualification`, and
+`postpublish-confidence` omit `publication_selection_json` and record publication
+source admission as not applicable. Coverage is selected independently.
+
+Fresh publish requests also require tooling with registry admission. After
+source verification, resolution collects bounded public npm and ClawHub
+observations for the selected packages, uploads them, then binds the immutable
+artifact and admission time before producers can start. Required read errors and
+unsupported bootstrap states block admission; latest-dependency drift is advisory.
+Supported first-package or trust-repair routes retain unresolved downstream owner
+authority, not permission to publish. The source fact remains source-only.
+Nonpublish requests do not collect registry observations.
+
+The SHA-pinned helper packs its semantic `-f validation_purpose` and
+`-f publication_selection_json` arguments into the existing
+`trusted_workflow_json` input. Raw workflow dispatch uses this closed envelope:
+`{"trustedWorkflow":{"ref":"main","fullRef":"refs/heads/main","sha":"<tooling-sha>"},"validationPurpose":"diagnostic","publicationSelection":null}`.
+For the existing direct branch route, `trustedWorkflow:null` lets the identity
+owner infer the executing identity; purpose is always explicit. Child workflows
+still receive only the resolved identity tuple. Existing request artifacts reopen
+without converting their inputs or witness digests.
+
+`pnpm release:candidate` defaults to the normal publication route. Choose
+`--publication-route prepared` before its first dispatch for the prepared button;
+merely supplying a protected tooling ref does not select that route. Saved state
+binds the choice and rejects contradictory resumes. Historical state without a
+route retains normal recovery semantics and gains no source-admission claim.
+For registry-admitted parents, the checklist reads authenticated retained planning
+summaries instead of repeating the two local registry sweeps. Preparation and
+publication compare that evidence with their actual selected operands; a normal
+parent cannot authorize the prepared route by changing the command afterward.
 
 Record the candidate SHA/ref and Tooling SHA/ref once for the release and reuse
 them for later Code-SHA, Release-SHA, and focused reruns. Main lineage
 authorizes the initial Tooling SHA selection; it does not authorize refreshing
 the tooling from moving `main`.
+
+## Retain and reconcile the root request
+
+Before creating remote refs, the helper writes a private operator artifact at
+`.artifacts/full-release-validation/<request-id>.json` and prints its path.
+Use `--request-file <path>` to choose the artifact location. It retains the
+repository, workflow, frozen target/tooling identities, transport refs, complete
+typed/defaulted inputs, effective soak, and the first observed run and attempt.
+The helper records attempted intent before its single workflow dispatch POST.
+
+After a lost response or interruption, reuse that exact artifact:
+
+```bash
+node scripts/full-release-validation-at-sha.mjs \
+  --reconcile-request .artifacts/full-release-validation/<request-id>.json
+```
+
+An existing `--request-file` also enters read-only reconciliation; conflicting
+target, tooling, or input arguments are rejected. Recovery performs no ref
+creation/deletion, dispatch, rerun, cancellation, Git fetch, or request rewrite.
+`dispatch=observed` reports the exact run URL and attempt, not successful
+validation. A newer attempt cannot replace the retained attempt.
+
+Missing or ambiguous runs, incomplete pagination, unavailable or mismatched input
+witnesses, and exhausted discovery remain `dispatch=unknown`. A complete HTTP
+rejection is retained as `dispatch=rejected`; neither state permits redispatch.
+Keep the artifact and printed refs for investigation. There is no automatic
+retention expiry or cleanup for the local artifact; remove it only through
+deliberate operator cleanup. Losing or deleting it never proves non-execution.
+Independent requests and copies on other hosts are not globally deduplicated.
+
+New requests require `FULL_RELEASE_SOURCE_ADMISSION_CONTRACT=1` and
+`FULL_RELEASE_DISPATCH_WITNESS_CONTRACT=1` in the pinned
+workflow. Older frozen tooling fails before remote creation instead of starting
+work whose inputs cannot be proven. The helper never upgrades the Tooling SHA.
+Use `frv status` for already-running frozen validations; choosing different
+tooling for a new validation requires the release owner's explicit decision.
+The workflow's separate input witness is attempt-bound and retained for seven
+days. It reads the event file directly, without interpolating inputs into step
+environment variables or logs. Only safe GitHub context and a SHA-256 digest are
+uploaded: input keys sorted lexicographically, primitive values normalized to
+wire strings, then JSON serialization. The immutable workflow SHA binds the
+input types; the complete typed and wire maps remain in the private local
+artifact. Runner or artifact-service failure can leave the witness unavailable;
+it is never a release receipt or publication authority.
+
+## Select coverage
 
 `provider` also accepts `anthropic` or `minimax` for cross-OS onboarding and the
 end-to-end agent turn. Regular `release/*` targets accept the branch's final
@@ -74,12 +166,15 @@ required coverage, gate results, reuse identity, the original parent attempt,
 the fresh candidate request plus producer and publisher evidence when preparation ran, and
 every exact child run ID, attempt, title, workflow ref, and Tooling SHA.
 Decision, Drain, manifest generation, evidence verification, and the final
-verifier consume the artifact for their current attempt. Collector retries
-use the exact run-ID cache as an acceleration. If that cache is unavailable,
-they restore the same immutable plan from the parent-run artifact, validate it,
-and upload the artifact again for the retry; they never rebuild the plan or
-redispatch tests. A missing or invalid artifact fails closed, so start a new
-validation instead of retrying that stale parent.
+verifier consume the artifact for their current attempt. After the original
+guarded upload succeeds, the sealer records the plan digest in its job log.
+Collector retries restore the exact run-ID cache before publication admission,
+authenticate its bytes against that original upload and digest, and re-upload
+the unchanged plan and admission for the current attempt. GitHub removes prior
+parent artifacts on a full rerun, so retain the cache and original job logs.
+If the cache is unavailable, an accessible plan artifact can supply the same
+authenticated bytes. Missing or invalid evidence fails closed; retries never
+rebuild the plan, recollect registry observations, or redispatch tests.
 Release Decision also repeats canonical reuse-chain validation before a reused
 run can pass. The sealed target SHA, evidence SHA, policy, changed-path set,
 selected run, root run, source manifest, trusted tooling identity, and child

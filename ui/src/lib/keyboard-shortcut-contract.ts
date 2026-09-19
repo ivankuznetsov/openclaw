@@ -36,7 +36,7 @@ export const KEYBOARD_SHORTCUT_COMBOS = {
   zoomOut: { modifiers: [], key: "-" },
   zoomReset: { modifiers: [], key: "0" },
   // Display-only mouse chords; never keyboard-matched.
-  toggleSessionSelect: { modifiers: ["mod"], key: "Click" },
+  toggleSessionSelect: { modifiers: ["alt"], key: "Click" },
   extendSessionSelect: { modifiers: ["shift"], key: "Click" },
 } as const satisfies Record<string, ShortcutDefinition<string>>;
 
@@ -127,3 +127,9 @@ export function matchesShortcutCombo(combo: KeyboardShortcutCombo, event: Keyboa
   }
   return event.code === `Key${combo.key.toUpperCase()}`;
 }
+
+/** Runtime controls of the lazily loaded shortcuts dialog. */
+export type KeyboardShortcutsDialogElement = HTMLElement & {
+  isOpen: boolean;
+  toggle: () => void;
+};

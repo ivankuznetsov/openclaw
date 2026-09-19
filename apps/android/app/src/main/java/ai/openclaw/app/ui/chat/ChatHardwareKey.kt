@@ -1,7 +1,5 @@
 package ai.openclaw.app.ui.chat
 
-import androidx.compose.foundation.text.input.InputTransformation
-import androidx.compose.foundation.text.input.TextFieldState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -20,34 +18,39 @@ import androidx.compose.ui.input.key.type
 import androidx.compose.ui.text.input.TextFieldValue
 
 @Composable
-internal fun ChatTextFieldStateAdapter(
+internal fun ChatTextFieldValueAdapter(
   value: String,
   onValueChange: (String) -> Unit,
   keyHandler: PhysicalChatSendKeyHandler,
-  content: @Composable (TextFieldState, InputTransformation) -> Unit,
+  content: @Composable (TextFieldValue, (TextFieldValue) -> Unit) -> Unit,
 ) {
-  val state = remember { TextFieldState(initialText = value) }
-  var lastTextValue by remember { mutableStateOf(value) }
-  // External draft replacement must not reset selection or IME composition on ordinary edits.
+  // Mirrors Compose's String adapter while exposing the IME composition range.
+  var textFieldValueState by remember { mutableStateOf(TextFieldValue(text = value)) }
+  val textFieldValue = textFieldValueState.copy(text = value)
   SideEffect {
-    if (value != lastTextValue) {
-      lastTextValue = value
-      state.edit { replace(0, length, value) }
+    if (
+      textFieldValue.selection != textFieldValueState.selection ||
+      textFieldValue.composition != textFieldValueState.composition
+    ) {
+      textFieldValueState = textFieldValue
     }
   }
-  content(
-    state,
-    InputTransformation {
-      val next = TextFieldValue(toString(), selection)
-      if (keyHandler.filterTextFieldUpdate(originalText.toString(), next).text != next.text) revertAllChanges()
-      // Publish during the input transaction: Send may run before the next frame/flow collection.
-      val text = toString()
-      if (text != lastTextValue) {
-        lastTextValue = text
-        onValueChange(text)
-      }
-    },
-  )
+  var lastTextValue by remember(value) { mutableStateOf(value) }
+
+  content(textFieldValue) { nextTextFieldValue ->
+    val filteredTextFieldValue =
+      keyHandler.filterTextFieldUpdate(
+        currentText = textFieldValue.text,
+        nextTextFieldValue = nextTextFieldValue,
+      )
+    textFieldValueState = filteredTextFieldValue
+
+    val stringChanged = lastTextValue != filteredTextFieldValue.text
+    lastTextValue = filteredTextFieldValue.text
+    if (stringChanged) {
+      onValueChange(filteredTextFieldValue.text)
+    }
+  }
 }
 
 internal class PhysicalChatSendKeyHandler {

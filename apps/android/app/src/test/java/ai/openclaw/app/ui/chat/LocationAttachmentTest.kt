@@ -31,6 +31,75 @@ class LocationAttachmentTest {
   @get:Rule val composeRule = createComposeRule()
 
   @Test
+  fun cachedAttachmentHonorsDisabledPrecisionWithRetainedFineGrant() {
+    val app = RuntimeEnvironment.getApplication()
+    (app as ai.openclaw.app.NodeApp).prefs.setLocationPreciseEnabled(false)
+    shadowOf(app).grantPermissions(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION)
+    val manager = app.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    shadowOf(manager).setProviderEnabled(LocationManager.GPS_PROVIDER, true)
+    val fix =
+      Location(LocationManager.GPS_PROVIDER).apply {
+        latitude = 12.345678
+        longitude = 45.678912
+        accuracy = 5f
+        time = System.currentTimeMillis()
+      }
+    shadowOf(manager).simulateLocation(LocationManager.GPS_PROVIDER, fix)
+    val links = mutableListOf<String>()
+    composeRule.setContent {
+      ClawDesignTheme { LocationAttachment(admit = { true }, onLocation = links::add) }
+    }
+    composeRule.onNodeWithText("Use current location").performClick()
+    composeRule.runOnIdle {
+      assertEquals(1, links.size)
+      org.junit.Assert.assertNotEquals("https://www.google.com/maps?q=12.345678,45.678912", links.single())
+    }
+    composeRule.onNodeWithText("Use current location").performClick()
+    composeRule.runOnIdle { assertEquals(links.first(), links.last()) }
+  }
+
+  @Test
+  fun pendingAttachmentRechecksPrecisionAndNeverUpgradesApproximateCapture() {
+    val app = RuntimeEnvironment.getApplication() as ai.openclaw.app.NodeApp
+    shadowOf(app).grantPermissions(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION)
+    val manager = app.getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    val provider = shadowOf(manager)
+    provider.setProviderEnabled(LocationManager.NETWORK_PROVIDER, false)
+    provider.setProviderEnabled(LocationManager.GPS_PROVIDER, true)
+    val links = mutableListOf<String>()
+    composeRule.setContent {
+      ClawDesignTheme { LocationAttachment(admit = { true }, onLocation = { links.add(it) }) }
+    }
+    for ((initial, final) in listOf(true to false, false to true)) {
+      val fix =
+        Location(LocationManager.GPS_PROVIDER).apply {
+          latitude = 12.345678
+          longitude = 45.678912
+          accuracy = 5f
+          time = System.currentTimeMillis() - 120_000
+        }
+      composeRule.runOnIdle {
+        app.prefs.setLocationPreciseEnabled(initial)
+        provider.simulateLocation(LocationManager.GPS_PROVIDER, fix)
+      }
+      composeRule.onNodeWithText("Use current location").performClick()
+      composeRule.runOnIdle {
+        assertTrue(provider.getLocationRequests(LocationManager.GPS_PROVIDER).isNotEmpty())
+        app.prefs.setLocationPreciseEnabled(final)
+        fix.time = System.currentTimeMillis()
+        provider.simulateLocation(LocationManager.GPS_PROVIDER, fix)
+      }
+      composeRule.waitForIdle()
+      composeRule.runOnIdle {
+        assertTrue(links.isNotEmpty())
+        org.junit.Assert.assertNotEquals("https://www.google.com/maps?q=12.345678,45.678912", links.last())
+        assertTrue(provider.getLocationRequests(LocationManager.GPS_PROVIDER).isEmpty())
+      }
+    }
+    composeRule.runOnIdle { assertEquals(2, links.size) }
+  }
+
+  @Test
   fun locationTimeoutShowsRecoveryMessageAndAllowsRetry() {
     val app = RuntimeEnvironment.getApplication()
     shadowOf(app).grantPermissions(Manifest.permission.ACCESS_COARSE_LOCATION)

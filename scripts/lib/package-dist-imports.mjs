@@ -1,11 +1,11 @@
-// Scans packaged dist JavaScript for relative imports and missing closure entries.
+// Scans packaged JavaScript for relative imports and missing closure entries.
 import { createRequire } from "node:module";
 import path from "node:path";
 import { visitModuleSpecifiers } from "./guard-inventory-utils.mjs";
 
 const require = createRequire(import.meta.url);
 const ts = require("typescript");
-const JS_DIST_FILE_RE = /^dist\/.*\.(?:cjs|js|mjs)$/u;
+const JS_FILE_RE = /\.(?:cjs|js|mjs)$/u;
 
 function normalizePackagePath(value) {
   return value.replace(/\\/gu, "/").replace(/^package\//u, "");
@@ -19,22 +19,11 @@ function hasJavaScriptFileExtension(value) {
   return /\.(?:cjs|js|mjs)$/u.test(path.posix.basename(stripSpecifierSuffix(value)));
 }
 
-function resolveDistImportPath(importerPath, specifier) {
-  if (!specifier.startsWith(".")) {
-    return null;
-  }
-  const stripped = stripSpecifierSuffix(specifier);
-  if (!stripped) {
-    return null;
-  }
-  return path.posix.normalize(path.posix.join(path.posix.dirname(importerPath), stripped));
-}
-
 function appendImportEdges(source, importerPath, imports) {
   const sourceFile = ts.createSourceFile(
     importerPath,
     source,
-    ts.ScriptTarget.Latest,
+    { languageVersion: ts.ScriptTarget.Latest, jsDocParsingMode: ts.JSDocParsingMode.ParseNone },
     false,
     ts.ScriptKind.JS,
   );
@@ -48,8 +37,19 @@ function appendImportEdges(source, importerPath, imports) {
       ) {
         return;
       }
-      const importedPath = resolveDistImportPath(importerPath, specifier);
-      if (importedPath && (kind !== "import-meta-url" || importedPath.startsWith("dist/"))) {
+      const importedPath = path.posix.normalize(
+        path.posix.join(path.posix.dirname(importerPath), stripSpecifierSuffix(specifier)),
+      );
+      // stageManagedHandoffRuntime copies this entry and stages its private Koffi
+      // closure before launch; this URL belongs to that runtime, not the tarball.
+      if (
+        kind === "import-meta-url" &&
+        importerPath === "dist/managed-handoff-runtime.mjs" &&
+        importedPath === "dist/node_modules/koffi/indirect.cjs"
+      ) {
+        return;
+      }
+      if (kind !== "import-meta-url" || importedPath.startsWith("dist/")) {
         imports.push({ importerPath, importedPath });
       }
     },
@@ -57,7 +57,7 @@ function appendImportEdges(source, importerPath, imports) {
   );
 }
 
-/** Collect missing-file errors for relative imports inside package dist files. */
+/** Collect missing-file errors for relative imports inside package files. */
 export function collectPackageDistImportErrors(params) {
   const files = [...new Set(params.files.map(normalizePackagePath))];
   const fileSet = new Set(files);
@@ -84,7 +84,7 @@ export function collectPackageDistImports(params) {
   const imports = [];
 
   for (const importerPath of files) {
-    if (!JS_DIST_FILE_RE.test(importerPath) || importerPath.includes("/node_modules/")) {
+    if (!JS_FILE_RE.test(importerPath) || /(?:^|\/)node_modules\//u.test(importerPath)) {
       continue;
     }
     const source = params.readText(importerPath);

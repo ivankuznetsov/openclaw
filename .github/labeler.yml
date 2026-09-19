@@ -4,6 +4,7 @@
           - "extensions/azure-speech/**"
           - "docs/providers/azure-speech.md"
           - "docs/tools/tts.md"
+          - "docs/tools/tts/**"
 "plugin: geolocation":
   - changed-files:
       - any-glob-to-any-file:
@@ -59,6 +60,7 @@
       - any-glob-to-any-file:
           - "extensions/feishu/**"
           - "docs/channels/feishu.md"
+          - "docs/channels/feishu/**"
 "channel: googlechat":
   - changed-files:
       - any-glob-to-any-file:
@@ -112,6 +114,12 @@
           - "extensions/beam/**"
           - "docs/plugins/beam.md"
           - "docs/plugins/reference/beam.md"
+"plugin: session-share":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/session-share/**"
+          - "docs/plugins/session-share.md"
+          - "docs/plugins/reference/session-share.md"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:
@@ -141,6 +149,7 @@
       - any-glob-to-any-file:
           - "extensions/imessage/**"
           - "docs/channels/imessage.md"
+          - "docs/channels/imessage/**"
 "channel: line":
   - changed-files:
       - any-glob-to-any-file:
@@ -361,7 +370,9 @@
           - "src/config/**/*sandbox*"
           - "docs/cli/sandbox.md"
           - "docs/gateway/sandbox*.md"
+          - "docs/gateway/sandboxing/**"
           - "docs/install/docker.md"
+          - "docs/install/docker/**"
           - "docs/tools/multi-agent-sandbox-tools.md"
 
 "deploy: cloudflare":
@@ -586,6 +597,7 @@
           - "extensions/fish-audio-speech/**"
           - "docs/providers/fish-audio.md"
           - "docs/tools/tts.md"
+          - "docs/tools/tts/**"
 "extensions: kilocode":
   - changed-files:
       - any-glob-to-any-file:
@@ -611,6 +623,7 @@
           - "docs/plugins/codex-harness/**"
           - "docs/plugins/codex-harness-reference.md"
           - "docs/plugins/codex-harness-runtime.md"
+          - "docs/plugins/codex-harness-runtime/**"
           - "docs/plugins/codex-supervision.md"
           - "docs/specs/codex-supervision.md"
 "extensions: copilot":
@@ -660,6 +673,12 @@
           - "extensions/qwen/**"
           - "docs/providers/qwen.md"
           - "docs/plugins/reference/qwen.md"
+"extensions: radius":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/radius/**"
+          - "docs/providers/radius.md"
+          - "docs/plugins/reference/radius.md"
 "extensions: runway":
   - changed-files:
       - any-glob-to-any-file:
@@ -697,6 +716,7 @@
       - any-glob-to-any-file:
           - "extensions/tts-local-cli/**"
           - "docs/tools/tts.md"
+          - "docs/tools/tts/**"
 "extensions: venice":
   - changed-files:
       - any-glob-to-any-file:
@@ -757,6 +777,12 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/anthropic-vertex/**"
+"extensions: apple-fm":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/apple-fm/**"
+          - "docs/plugins/apple-fm.md"
+          - "docs/plugins/reference/apple-fm.md"
 "extensions: brave":
   - changed-files:
       - any-glob-to-any-file:
@@ -799,6 +825,11 @@
           - "extensions/fireworks/**"
           - "docs/providers/fireworks.md"
           - "docs/plugins/reference/fireworks.md"
+"extensions: github":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/github/**"
+          - "docs/plugins/github.md"
 "extensions: github-copilot":
   - changed-files:
       - any-glob-to-any-file:

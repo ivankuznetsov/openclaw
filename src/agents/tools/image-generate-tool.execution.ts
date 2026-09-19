@@ -14,16 +14,12 @@ import type {
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { resolveGeneratedMediaMaxBytes } from "../../media/configured-max-bytes.js";
 import { getImageMetadata } from "../../media/media-services.js";
-import { saveMediaBuffer } from "../../media/store.js";
-import { acquirePluginCapabilityProviders } from "../../plugins/capability-provider-acquisition.js";
-import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
-import { AsyncWorkScope } from "../../shared/async-work-scope.js";
+import { extractOriginalFilename, saveMediaBuffer } from "../../media/store.js";
 import {
   formatGeneratedAttachmentLines,
   sanitizeGeneratedMediaDisplayText,
   type AgentGeneratedAttachment,
 } from "../generated-attachments.js";
-import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
 import { ToolInputError } from "./common.js";
 import { persistGeneratedMediaBatch } from "./generated-media-batch-persistence.js";
 import {
@@ -37,101 +33,10 @@ import {
   loadMediaToolReferences,
   resolveMediaToolSandboxConfig,
 } from "./media-tool-shared.js";
+import type { ToolFsPolicy } from "./tool-runtime.helpers.js";
 
 const DEFAULT_RESOLUTION: ImageGenerationResolution = "1K";
 const GENERATED_IMAGE_MEDIA_SUBDIR = "tool-image-generation";
-
-export async function acquireImageGenerationToolProviders(params: {
-  cfg: OpenClawConfig;
-  prepared?: PreparedModelRuntimeSnapshot;
-}) {
-  const work = new AsyncWorkScope();
-  const prepared = params.prepared;
-  const inGeneration = <T>(run: () => T): T =>
-    prepared
-      ? withPluginRuntimeGenerationScope(
-          { metadataSnapshot: prepared.metadataSnapshot, pluginRegistry: prepared.pluginRegistry },
-          run,
-        )
-      : run();
-  let captured:
-    | ReturnType<NonNullable<PreparedModelRuntimeSnapshot["acquireMediaCapabilityProviders"]>>
-    | undefined;
-  let cold:
-    | Awaited<ReturnType<typeof acquirePluginCapabilityProviders<"imageGenerationProviders">>>
-    | undefined;
-  let releaseCompletion: Promise<void> | undefined;
-  const release = () =>
-    (releaseCompletion ??= Promise.resolve().then(async () => {
-      work.beginClose();
-      try {
-        await work.runWhenIdle(async () => {
-          const errors: unknown[] = [];
-          // A copied prepared registry can contribute callbacks without a second physical claim.
-          // Drain the cold view's work before surrendering its original prepared source.
-          for (const owner of [cold, captured]) {
-            try {
-              await owner?.release();
-            } catch (error) {
-              errors.push(error);
-            }
-          }
-          if (errors.length > 0) {
-            throw new AggregateError(errors, "Image provider resource cleanup failed");
-          }
-        });
-      } finally {
-        await work.drain();
-      }
-    }));
-  try {
-    const providers = await work.track(async () => {
-      captured = prepared?.acquireMediaCapabilityProviders?.();
-      const known = captured
-        ? captured.providers.imageGenerationProviders
-        : prepared?.mediaCapabilityProviders?.imageGenerationProviders;
-      if (known !== undefined) {
-        return [...known];
-      }
-      cold = await inGeneration(() =>
-        acquirePluginCapabilityProviders({ key: "imageGenerationProviders", cfg: params.cfg }),
-      );
-      return cold.providers;
-    });
-    return {
-      providers,
-      assertOpen: () => {
-        if (releaseCompletion) {
-          throw new Error("Image provider resources have been released");
-        }
-        captured?.assertOpen();
-        cold?.assertOpen();
-      },
-      run: <T>(run: () => T | Promise<T>) =>
-        releaseCompletion
-          ? Promise.reject(new Error("Image provider resources have been released"))
-          : work.track(() => inGeneration(() => (cold ? cold.run(run) : run()))),
-      release,
-    };
-  } catch (error) {
-    let cleanupFailure: { error: unknown } | undefined;
-    try {
-      await release();
-    } catch (cleanupError) {
-      cleanupFailure = { error: cleanupError };
-    }
-    if (cleanupFailure) {
-      throw new AggregateError(
-        [error, cleanupFailure.error],
-        "Image provider acquisition and cleanup failed",
-        {
-          cause: error,
-        },
-      );
-    }
-    throw error;
-  }
-}
 
 function formatIgnoredImageGenerationOverride(override: ImageGenerationIgnoredOverride): string {
   return `${sanitizeGeneratedMediaDisplayText(override.key)}=${sanitizeGeneratedMediaDisplayText(override.value)}`;
@@ -259,7 +164,7 @@ export async function executeImageGenerationJob(params: {
     type: "image" as const,
     path: image.path,
     mimeType: image.contentType,
-    name: image.id,
+    name: extractOriginalFilename(image.path),
     sizeBytes: image.size,
   }));
   const lines = [
@@ -317,6 +222,8 @@ export async function loadImageGenerationReferences(params: {
   imageInputs: string[];
   maxBytes: number;
   workspaceDir?: string;
+  cwd?: string;
+  fsPolicy?: ToolFsPolicy;
   sandboxConfig: ReturnType<typeof resolveMediaToolSandboxConfig>;
   ssrfPolicy?: SsrFPolicy;
   signal?: AbortSignal;
@@ -333,6 +240,8 @@ export async function loadImageGenerationReferences(params: {
     expectedKind: "image",
     sandbox: params.sandboxConfig,
     workspaceDir: params.workspaceDir,
+    cwd: params.cwd,
+    fsPolicy: params.fsPolicy,
     maxBytes: params.maxBytes,
     ssrfPolicy: params.ssrfPolicy,
     signal: params.signal,
