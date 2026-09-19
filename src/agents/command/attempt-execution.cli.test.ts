@@ -24,8 +24,6 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
@@ -37,10 +35,6 @@ import { listOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db
 import { registerGeneratedMediaTaskActivity } from "../../tasks/generated-media-task-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
-import {
-  createChannelTestPluginBase,
-  createTestRegistry,
-} from "../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createTestPreparedRunAdmission } from "../admitted-run-context.test-support.js";
@@ -75,6 +69,7 @@ import {
   SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES,
   type SubagentAnnounceDeliveryCase,
 } from "./attempt-execution.announce.test-support.js";
+import { createCliImageCapabilityPlugins } from "./attempt-execution.cli.test-support.js";
 import { runAgentAttempt as runAgentAttemptImpl } from "./attempt-execution.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import { resolveEmbeddedModelSelection } from "./model-selection.js";
@@ -995,24 +990,6 @@ describe("CLI attempt execution", () => {
     "live model switch",
     "canonical override repair",
   ] as const)("retains CLI image capability after a thinking-off %s", async (transition) => {
-    // This route tests CLI image capability, not bundled message-action discovery.
-    if (transition === "implicit configured primary") {
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: "discord",
-            source: "test",
-            plugin: {
-              ...createChannelTestPluginBase({
-                id: "discord",
-                capabilities: { chatTypes: ["group", "channel"] },
-              }),
-              actions: { describeMessageTool: () => ({ actions: ["send"] }) },
-            },
-          },
-        ]),
-      );
-    }
     const canonicalRepair = transition === "canonical override repair";
     const model = canonicalRepair ? "custom/child" : "claude-sonnet-4-6";
     const modelRef = `anthropic/${model}`;
@@ -1072,22 +1049,8 @@ describe("CLI attempt execution", () => {
         ? { channels: { modelByChannel: { discord: { "vision-fixture": "custom/child" } } } }
         : {}),
     };
-    const metadataSnapshot = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "anthropic",
-          providers: ["anthropic"],
-          cliBackends: ["claude-cli"],
-          modelCatalog: {
-            providers: {
-              anthropic: {
-                models: [{ id: model, name: model, reasoning: true, input: ["text", "image"] }],
-              },
-            },
-          },
-        },
-      ],
-    });
+    const { metadataSnapshot, pluginRegistry } = createCliImageCapabilityPlugins(model);
+    setActivePluginRegistry(pluginRegistry);
     const opts: RunAgentAttemptParams["opts"] = {
       message: "Inspect the image after switching models",
       thinking: "off",
@@ -1152,7 +1115,7 @@ describe("CLI attempt execution", () => {
     await withPluginRuntimeGenerationScope(
       {
         metadataSnapshot,
-        pluginRegistry: createEmptyPluginRegistry(),
+        pluginRegistry,
       },
       async () => {
         await runOuterCliFallback({
