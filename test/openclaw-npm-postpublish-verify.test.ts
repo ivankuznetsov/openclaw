@@ -18,7 +18,6 @@ import { build } from "tsdown";
 import { describe, expect, it, vi } from "vitest";
 import { listBundledPluginPackArtifacts } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { createRuntimeDependencyOwnershipBuildPlugin } from "../scripts/lib/runtime-dependency-ownership-build-plugin.mts";
-import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../scripts/lib/runtime-dependency-ownership-contract.mts";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
@@ -41,12 +40,18 @@ import {
   rewriteRootRuntimeImportsToStableAliases,
   writeStableRootRuntimeAliases,
 } from "../scripts/runtime-postbuild.mts";
+import { RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH } from "../src/infra/runtime-dependency-ownership.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../src/infra/runtime-worker-url.js";
 import {
   WORKER_BUNDLE_ENTRY_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 } from "../src/shared/worker-bundle-hash.js";
 import { withEnv } from "../src/test-utils/env.js";
 import { createScriptTestHarness } from "./scripts/test-helpers.js";
+import { toolingTsEntrypoints } from "./scripts/tooling-ts-runtime.test-support.js";
 
 const INSTALLED_ROOT_DIST_JS_FILE_SCAN_LIMIT = 10_000;
 const requiredBundledPluginPackPaths = listBundledPluginPackArtifacts();
@@ -70,15 +75,31 @@ describe("parseOpenClawNpmPostpublishVerifyArgs", () => {
     });
   });
 
-  it("rejects missing, option-like, and extra arguments before verification", () => {
+  it.each([
+    { argv: ["2026.3.23", "extra"] },
+    { argv: ["2026.3.23", ""] },
+    { argv: ["2026.3.23", " \t "] },
+    { argv: ["2026.3.23", "", "--unexpected"] },
+    { argv: ["--", "2026.3.23", ""] },
+  ])("rejects excess postpublish argv $argv before verification", ({ argv }) => {
+    expect(() => parseOpenClawNpmPostpublishVerifyArgs(argv)).toThrow(
+      "Unexpected openclaw npm postpublish verifier argument",
+    );
+  });
+
+  it("keeps help ahead of unused operands", () => {
+    expect(parseOpenClawNpmPostpublishVerifyArgs(["--", "--help", ""])).toEqual({
+      help: true,
+      version: "",
+    });
+  });
+
+  it("rejects missing and option-like arguments before verification", () => {
     expect(() => parseOpenClawNpmPostpublishVerifyArgs([])).toThrow(
       openClawNpmPostpublishVerifyUsage(),
     );
     expect(() => parseOpenClawNpmPostpublishVerifyArgs(["--tag"])).toThrow(
       "Unknown openclaw npm postpublish verifier option: --tag",
-    );
-    expect(() => parseOpenClawNpmPostpublishVerifyArgs(["2026.3.23", "extra"])).toThrow(
-      "Unexpected openclaw npm postpublish verifier argument: extra",
     );
   });
 });
@@ -768,11 +789,13 @@ describe("collectInstalledPackageErrors", () => {
       const probe = spawnSync(
         process.execPath,
         [
-          "--import",
-          "tsx",
+          ...resolveRuntimeWorkerArgv(
+            resolveRuntimeWorkerUrl(toolingTsEntrypoints.npmPostpublish),
+          ).slice(0, -1),
+          "--input-type=module",
           "--eval",
           [
-            'import { collectInstalledBundledExtensionManifestErrors } from "./scripts/openclaw-npm-postpublish-verify.ts";',
+            `import { collectInstalledBundledExtensionManifestErrors } from ${JSON.stringify(resolveRuntimeWorkerUrl(toolingTsEntrypoints.npmPostpublish).href)};`,
             `process.stdout.write(JSON.stringify(collectInstalledBundledExtensionManifestErrors(${JSON.stringify(packageRoot)})));`,
           ].join("\n"),
         ],
@@ -1142,6 +1165,27 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       writeFileSync(
         join(packageRoot, "dist", "typebox-CXXonh2u.js"),
         'import { Type } from "typebox";\nexport { Type };\n',
+        "utf8",
+      );
+
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts Bun built-in modules without npm dependency declarations", () => {
+    const packageRoot = makeInstalledPackageRoot();
+
+    try {
+      writePackageFile(packageRoot, "package.json", {
+        version: "2026.9.9",
+        dependencies: {},
+      });
+      mkdirSync(join(packageRoot, "dist"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "dist", "bun-sqlite-library.js"),
+        'import { Database } from "bun:sqlite";\nconst { dlopen } = require("bun:ffi");\nexport { Database, dlopen };\n',
         "utf8",
       );
 
@@ -2034,7 +2078,7 @@ describe("runtime dependency ownership build contract", () => {
       mkdirSync(dirname(file), { recursive: true });
       writeFileSync(file, source);
     }
-    const bundles = await build({
+    const { bundles } = await build({
       config: false,
       tsconfig: false,
       cwd: root,

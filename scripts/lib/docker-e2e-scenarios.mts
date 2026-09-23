@@ -62,8 +62,6 @@ const updateMigrationCommand = upgradeSurvivorScriptCommand(
   "OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1",
   'export OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC="${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC:-openclaw@latest}"; export OPENCLAW_UPGRADE_SURVIVOR_SCENARIO="${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-plugin-deps-cleanup}"',
 );
-const updateRunPackageSelfUpgradeCommand =
-  "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade";
 const updateFirstHopCompatCommand =
   "OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat";
 const CODEX_HARNESS_API_KEY_ENV = "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key";
@@ -249,13 +247,10 @@ function createPackageUpdateMaintenanceLanes() {
     npmLane("update-first-hop-compat", updateFirstHopCompatCommand, {
       resources: ["service"],
       stateScenario: "upgrade-survivor",
-      timeoutMs: 25 * 60 * 1000,
-      weight: 3,
-    }),
-    npmLane("update-run-package-self-upgrade", updateRunPackageSelfUpgradeCommand, {
-      resources: ["service"],
-      stateScenario: "upgrade-survivor",
-      timeoutMs: 45 * 60 * 1000,
+      // Five serial packaged-updater hops (2026.9.1 through 2026.9.5) take
+      // ~9-11 minutes each on hosted runners as of 2026.9.6; 45 minutes cut the
+      // fifth hop off. Every stable release adds a hop, so re-check this budget.
+      timeoutMs: 75 * 60 * 1000,
       weight: 3,
     }),
   ];
@@ -415,6 +410,14 @@ export const mainLanes: DockerE2eLane[] = [
     providers: ["claude-cli", "google-gemini-cli"],
     timeoutMs: LIVE_PROFILE_TIMEOUT_MS,
     weight: 4,
+  }),
+  liveLane("live-anthropic-cache", liveDockerScriptCommand("e2e/anthropic-cache-live-docker.sh"), {
+    e2eImageKind: "functional",
+    provider: "claude",
+    retries: 0,
+    retryPatterns: [],
+    timeoutMs: 15 * 60 * 1000,
+    weight: 2,
   }),
   liveLane(
     "live-gateway",
@@ -675,6 +678,7 @@ export const mainLanes: DockerE2eLane[] = [
   lane(
     "session-runtime-context",
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:session-runtime-context",
+    { resources: ["service"] },
   ),
   lane(
     "plugin-binding-command-escape",
@@ -916,7 +920,6 @@ const releasePathPackageMigrationLanes = scheduledLaneList(
 const releasePathPackageSelfUpgradeLanes = scheduledLaneList(
   "upgrade-survivor",
   "update-first-hop-compat",
-  "update-run-package-self-upgrade",
 );
 const releasePathPackageUpdateCoreLanes = [
   ...releasePathPackageOnboardingLanes,
@@ -932,6 +935,7 @@ const primaryReleasePathChunks: Record<string, DockerE2eLane[]> = {
       "gateway-network",
       "config-reload",
       "session-runtime-context",
+      "live-anthropic-cache",
       "plugin-binding-command-escape",
       "agent-bundle-mcp-tools",
       "mcp-channels",

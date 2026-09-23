@@ -45,7 +45,8 @@ vi.mock("../auto-reply/reply/dispatch-acp-transcript.runtime.js", async (importO
   };
 });
 
-vi.mock("../auto-reply/reply/dispatch-acp-manager.runtime.js", () => ({
+vi.mock("../auto-reply/reply/dispatch-acp-manager.runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../auto-reply/reply/dispatch-acp-manager.runtime.js")>()),
   getAcpSessionManager: () => ({
     resolveSession: ({ sessionKey }: { sessionKey: string }) => ({
       kind: "ready",
@@ -314,6 +315,7 @@ describe("Gateway ACP completion ownership", () => {
         },
       });
     });
+    const settlementObservers: Promise<unknown>[] = [];
     const frames: Array<{
       event?: string;
       payload?: {
@@ -361,8 +363,10 @@ describe("Gateway ACP completion ownership", () => {
           (frame) =>
             frame.event === "sessions.changed" &&
             frame.payload?.sessionKey === sessionKey &&
-            frame.payload?.reason === "chat.run.settled",
+            frame.payload?.reason === "agent.input.settled",
         );
+        // Keep the event waiter owned if the acceptance RPC fails before its await.
+        settlementObservers.push(Promise.allSettled([settled]));
         const accepted = await rpcReq(ws, "chat.send", sendParameters);
         expect(accepted.ok).toBe(true);
         if (scenario.rpcAbort) {
@@ -514,27 +518,57 @@ describe("Gateway ACP completion ownership", () => {
             .toBe(true);
         }
         if (scenario.bound) {
-          // Source custody precedes ACP effects; the bound transcript owns the reply.
-          expect
-            .soft(
-              readTranscriptMessages({
-                agentId: "main",
-                sessionId: `source-${sessionId}`,
-                sessionKey,
-                storePath,
-              }),
-            )
-            .toMatchObject(
-              ["cold", "warm"].slice(0, index + 1).map((turn) => ({
+          // The bound target owns ACP history; the dashboard retains each delivered reply too.
+          const sourceMessages = readTranscriptMessages({
+            agentId: "main",
+            sessionId: `source-${sessionId}`,
+            sessionKey,
+            storePath,
+          });
+          expect.soft(sourceMessages).toMatchObject(
+            ["cold", "warm"].slice(0, index + 1).flatMap((turn) => [
+              {
                 role: "user",
                 content: `request ${turn}`,
                 idempotencyKey: `acp-completion-${suffix}-${turn}:user`,
-              })),
-            );
+              },
+              {
+                role: "assistant",
+                content: [{ type: "text", text: "same accepted reply" }],
+                idempotencyKey: `acp-completion-${suffix}-${turn}`,
+              },
+            ]),
+          );
+          for (const [transcript, ownerKey] of [
+            [sourceMessages, sessionKey],
+            [messages, targetSessionKey],
+          ] as const) {
+            // Media is copied into each transcript owner's namespace, not shared by URL.
+            const mediaPrefix = `/api/chat/media/outgoing/${encodeURIComponent(ownerKey)}/`;
+            expect
+              .soft(
+                readAssistantDisplayContent(
+                  transcript.findLast((message) => message.role === "assistant"),
+                ),
+              )
+              .toMatchObject([
+                { type: "text", text: "same accepted reply" },
+                {
+                  type: "image",
+                  mimeType: "image/png",
+                  sizeBytes: 68,
+                  width: 1,
+                  height: 1,
+                  url: expect.stringContaining(mediaPrefix),
+                  openUrl: expect.stringContaining(mediaPrefix),
+                },
+              ]);
+          }
         }
       }
     } finally {
       releaseTurn.resolve();
+      await Promise.all(settlementObservers);
       ws.off("message", capture);
     }
   });

@@ -5,10 +5,8 @@ import { sha256Hex } from "./crypto-digest.js";
 import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { hasErrnoCode } from "./errors.js";
 import { mergePathPrepend } from "./path-prepend.js";
-import {
-  resolvePnpmGlobalDirFromGlobalRoot,
-  type ResolvedGlobalInstallTarget,
-} from "./update-global.js";
+import type { ResolvedGlobalInstallTarget } from "./update-global.js";
+import { resolveNativePackageProjectRoot } from "./update-native-package-owner.js";
 import { resolvePnpmCandidateEnv } from "./update-package-manager.js";
 import {
   relocateRuntimeLauncher,
@@ -126,10 +124,7 @@ export async function prepareNativePackageStage(params: {
     installTarget.manager === "bun"
       ? resolveBunGlobalInstallOwner(installTarget.packageRoot, env)
       : null;
-  const ownerRoot =
-    installTarget.manager === "pnpm"
-      ? resolvePnpmGlobalDirFromGlobalRoot(installTarget.globalRoot)
-      : bunOwner?.globalProjectRoot;
+  const ownerRoot = resolveNativePackageProjectRoot(installTarget, env);
   const liveBinDir = params.globalBinDir?.trim();
   if (!ownerRoot || !liveBinDir) {
     throw new Error(
@@ -191,6 +186,11 @@ export async function prepareNativePackageStage(params: {
       installTarget.manager === "pnpm"
         ? [`--config.global-dir=${projectRoot}`, `--config.global-bin-dir=${binDir}`]
         : [];
+    if (installTarget.manager === "pnpm") {
+      // pnpm 12 ignores the CLI bin override; its lower-case env key wins.
+      env.pnpm_config_global_bin_dir = binDir;
+      env.PNPM_CONFIG_GLOBAL_BIN_DIR = binDir;
+    }
     if (installTarget.manager === "bun") {
       env.BUN_INSTALL_GLOBAL_DIR = projectRoot;
       env.BUN_INSTALL_BIN = binDir;

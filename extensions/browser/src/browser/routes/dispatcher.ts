@@ -17,6 +17,8 @@ type BrowserDispatchRequest = {
   body?: unknown;
   signal?: AbortSignal;
   requester?: BrowserRequest["requester"];
+  assertCurrent?: BrowserRequest["assertCurrent"];
+  screencastAuthority?: BrowserRequest["screencastAuthority"];
 };
 
 type BrowserDispatchResponse = {
@@ -121,6 +123,8 @@ export function createBrowserRouteDispatcher(ctx: BrowserRouteContext) {
             body,
             signal,
             requester: req.requester,
+            assertCurrent: req.assertCurrent,
+            screencastAuthority: req.screencastAuthority,
           },
           res,
         );

@@ -16,8 +16,6 @@ const ESCAPED_INTERNAL_RUNTIME_CONTEXT_END = "[[OPENCLAW_INTERNAL_CONTEXT_END]]"
 /** Notice inserted into runtime-generated context blocks. */
 export const OPENCLAW_RUNTIME_CONTEXT_NOTICE =
   "This context is runtime-generated, not user-authored. Keep internal details private.";
-/** Header for runtime events passed as prompt context. */
-export const OPENCLAW_RUNTIME_EVENT_HEADER = "OpenClaw runtime event.";
 /** Custom message type used for structured runtime-context messages. */
 export const OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
 
@@ -25,6 +23,16 @@ export const OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE = "openclaw.runtime-context";
 export type RuntimeContextFragment = {
   kind: "runtime-instruction" | "conversation-data" | "heartbeat-outcome";
   text: string;
+};
+
+export type CurrentInboundPromptContext = {
+  text: string;
+  /** Producer-owned fragments for model projection; text remains the legacy rendering. */
+  fragments?: RuntimeContextFragment[];
+  resumableText?: string;
+  promptJoiner?: "\n\n" | "\n" | " ";
+  /** Generated goal blocks owned by inbound-context assembly, never user text. */
+  injectedGoalContexts?: string[];
 };
 
 const LEGACY_INTERNAL_CONTEXT_HEADER =
@@ -215,7 +223,7 @@ function stripLegacyInternalRuntimeContext(text: string): string {
 const RUNTIME_CONTEXT_PROMPT_HEADERS: readonly string[] = [
   "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.",
   "OpenClaw runtime context for the immediately preceding user message.",
-  OPENCLAW_RUNTIME_EVENT_HEADER,
+  "OpenClaw runtime event.",
 ];
 
 const RUNTIME_CONTEXT_NOTICE_PATTERN = new RegExp(

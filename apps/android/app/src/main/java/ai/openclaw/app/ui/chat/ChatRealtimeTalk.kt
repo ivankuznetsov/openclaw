@@ -16,10 +16,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.platform.LocalContext
 import androidx.core.content.ContextCompat
 
@@ -45,14 +42,14 @@ internal fun rememberChatRealtimeTalkLauncher(viewModel: MainViewModel): () -> U
   val context = LocalContext.current
   val talkSetupReadiness by viewModel.talkSetupReadiness.collectAsState()
   val currentTalkSetup by rememberUpdatedState(talkSetupReadiness.realtimeTalk)
-  val failureText by viewModel.talkModeFailureText.collectAsState()
-  var setupMessage by remember { mutableStateOf<String?>(null) }
+  val failureText by viewModel.talkFailureText.collectAsState()
+  val setupMessage by viewModel.pendingTalkSetupMessage.collectAsState()
   val showSetupMessage = {
-    setupMessage = gatewayTalkSetupDescription(currentTalkSetup)
+    viewModel.showTalkSetupMessage(gatewayTalkSetupDescription(currentTalkSetup))
   }
   val dismissMessage = {
     viewModel.acknowledgeTalkModeFailure()
-    setupMessage = null
+    viewModel.dismissTalkSetupMessage()
   }
   (failureText ?: setupMessage)?.let { message ->
     FoldAwarePrompt(
