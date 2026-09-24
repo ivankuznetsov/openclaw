@@ -30,6 +30,7 @@ import ai.openclaw.app.gateway.GatewayMediaKind
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.systemagent.SystemAgentChatState
 import ai.openclaw.app.ui.GatewayConnectPlan
@@ -44,6 +45,7 @@ import ai.openclaw.app.ui.chat.shouldMigrateComposerDraft
 import ai.openclaw.app.ui.chat.toOutgoingAttachment
 import ai.openclaw.app.voice.AndroidAudioInputSession
 import ai.openclaw.app.voice.AudioInputDeviceOption
+import ai.openclaw.app.voice.TalkFailureNotice
 import ai.openclaw.app.voice.VoiceWakePreferences
 import android.Manifest
 import android.app.Application
@@ -612,8 +614,8 @@ class MainViewModel private constructor(
   internal val gatewayConnectionHandoff: StateFlow<GatewayConnectionHandoff> =
     runtimeState(initial = GatewayConnectionHandoff()) { it.gatewayConnectionHandoff }
   val pairedGateways: StateFlow<List<GatewayRegistryEntry>> = prefs.gatewayRegistry.entries
-  private val pendingTalkSetupMessageMutable = MutableStateFlow<String?>(null)
-  val pendingTalkSetupMessage: StateFlow<String?> = pendingTalkSetupMessageMutable
+  private val pendingTalkSetupMessageMutable = MutableStateFlow<NativeText?>(null)
+  val pendingTalkSetupMessage: StateFlow<NativeText?> = pendingTalkSetupMessageMutable
   val activeGatewayStableId: StateFlow<String?> = prefs.gatewayRegistry.activeStableId
   val connectedGatewayStableIds: StateFlow<List<String>> = prefs.gatewayRegistry.connectedStableIds
 
@@ -653,7 +655,7 @@ class MainViewModel private constructor(
   val talkModeSpeaking: StateFlow<Boolean> = runtimeState(initial = false) { it.talkModeSpeaking }
   val talkAwaitingAgent: StateFlow<Boolean> = runtimeState(initial = false) { it.talkAwaitingAgent }
   val talkModeStatusText: StateFlow<String> = runtimeState(initial = "Off") { it.talkModeStatusText }
-  val talkFailureText: StateFlow<String?> = runtimeState(initial = null) { it.talkFailureText }
+  internal val talkFailureNotice: StateFlow<TalkFailureNotice?> = runtimeState(initial = null) { it.talkFailureNotice }
 
   val chatSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.chatSessionKey }
   internal val chatPermissionSettingsAvailable: StateFlow<Boolean> = runtimeState(initial = false) { it.chatPermissionSettingsAvailable }
@@ -1223,16 +1225,16 @@ class MainViewModel private constructor(
     }
   }
 
-  fun acknowledgeTalkModeFailure() {
-    ensureRuntime().acknowledgeTalkModeFailure()
+  internal fun acknowledgeTalkModeFailure(notice: TalkFailureNotice) {
+    ensureRuntime().acknowledgeTalkModeFailure(notice)
   }
 
-  fun showTalkSetupMessage(message: String) {
+  fun showTalkSetupMessage(message: NativeText) {
     pendingTalkSetupMessageMutable.value = message
   }
 
-  fun dismissTalkSetupMessage() {
-    pendingTalkSetupMessageMutable.value = null
+  fun dismissTalkSetupMessage(message: NativeText) {
+    pendingTalkSetupMessageMutable.update { if (it === message) null else it }
   }
 
   fun setTalkModeEnabled(enabled: Boolean) {

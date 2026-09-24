@@ -150,6 +150,12 @@ private data class TalkStatus(
   val failureAcknowledged: Boolean = false,
 )
 
+/** Identity is the failure's status owner, retained across its relay close event. */
+internal data class TalkFailureNotice(
+  val text: String,
+  val owner: Any,
+)
+
 private data class TalkConfigCache(
   val value: TalkModeGatewayConfigState = TalkModeGatewayConfigParser.parse(null),
   val loaded: Boolean = false,
@@ -276,9 +282,11 @@ class TalkModeManager internal constructor(
   val awaitingAgent: StateFlow<Boolean> = LocaleResolvingStateFlow(status) { it.awaitingAgent }
 
   /** The current unacknowledged failure; dismissal leaves the diagnostic status intact. */
-  val failureText: StateFlow<String?> =
+  internal val failureNotice: StateFlow<TalkFailureNotice?> =
     LocaleResolvingStateFlow(status) { status ->
-      status.takeIf { it.state == TalkStatusState.TalkFailure && !it.failureAcknowledged }?.text?.resolveNativeText()
+      status
+        .takeIf { it.state == TalkStatusState.TalkFailure && !it.failureAcknowledged }
+        ?.let { TalkFailureNotice(it.text.resolveNativeText(), it.owner) }
     }
 
   private fun setStatus(
@@ -299,10 +307,14 @@ class TalkModeManager internal constructor(
   }
 
   /** Dismisses this failure across Chat recreation while retaining its terminal status. */
-  fun acknowledgeFailure() {
+  internal fun acknowledgeFailure(notice: TalkFailureNotice) {
     synchronized(realtimeCapturePauseLock) {
       status.update { current ->
-        if (current.state == TalkStatusState.TalkFailure) current.copy(failureAcknowledged = true) else current
+        if (current.state == TalkStatusState.TalkFailure && current.owner === notice.owner) {
+          current.copy(failureAcknowledged = true)
+        } else {
+          current
+        }
       }
     }
   }

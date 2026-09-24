@@ -1,8 +1,9 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.MainViewModel
-import ai.openclaw.app.gatewayTalkSetupDescription
+import ai.openclaw.app.gatewayTalkSetupDescriptionText
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.requiresSetup
 import ai.openclaw.app.ui.FoldAwarePrompt
 import ai.openclaw.app.ui.design.ClawTheme
@@ -42,16 +43,21 @@ internal fun rememberChatRealtimeTalkLauncher(viewModel: MainViewModel): () -> U
   val context = LocalContext.current
   val talkSetupReadiness by viewModel.talkSetupReadiness.collectAsState()
   val currentTalkSetup by rememberUpdatedState(talkSetupReadiness.realtimeTalk)
-  val failureText by viewModel.talkFailureText.collectAsState()
+  val failureNotice by viewModel.talkFailureNotice.collectAsState()
   val setupMessage by viewModel.pendingTalkSetupMessage.collectAsState()
   val showSetupMessage = {
-    viewModel.showTalkSetupMessage(gatewayTalkSetupDescription(currentTalkSetup))
+    viewModel.showTalkSetupMessage(gatewayTalkSetupDescriptionText(currentTalkSetup))
   }
-  val dismissMessage = {
-    viewModel.acknowledgeTalkModeFailure()
-    viewModel.dismissTalkSetupMessage()
-  }
-  (failureText ?: setupMessage)?.let { message ->
+  val shownFailure = failureNotice
+  val shownSetup = setupMessage
+  (shownFailure?.text ?: shownSetup?.resolveNativeTextResource())?.let { message ->
+    val dismissMessage = {
+      if (shownFailure != null) {
+        viewModel.acknowledgeTalkModeFailure(shownFailure)
+      } else if (shownSetup != null) {
+        viewModel.dismissTalkSetupMessage(shownSetup)
+      }
+    }
     FoldAwarePrompt(
       onDismissRequest = dismissMessage,
       title = nativeString("Talk"),

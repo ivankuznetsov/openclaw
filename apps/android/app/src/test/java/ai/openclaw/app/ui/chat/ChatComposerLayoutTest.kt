@@ -1076,6 +1076,32 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun dismissingSetupDoesNotAcknowledgeAnUnseenTalkFailure() {
+    val viewModel = showChat(useChatShell = true)
+    val setup = "Configure a Realtime Talk provider on the Gateway"
+    val failure = "Realtime provider authentication failed. Check the provider credentials and try again."
+    composeRule.runOnIdle { viewModel.showTalkSetupMessage(verbatimText(setup)) }
+    val setupDismiss =
+      checkNotNull(
+        composeRule
+          .onNodeWithText(nativeString("OK"))
+          .fetchSemanticsNode()
+          .config[SemanticsActions.OnClick]
+          .action,
+      )
+
+    // A failure may arrive after the setup dialog was drawn, but before its OK tap is handled.
+    composeRule.runOnIdle {
+      val getter = NodeRuntime::class.java.getDeclaredMethod("getTalkMode")
+      getter.isAccessible = true
+      val manager = getter.invoke(runtime) as TalkModeManager
+      manager.stopAllCapture(failure = verbatimText(failure))
+      assertTrue(setupDismiss())
+    }
+    composeRule.onNodeWithText(failure).assertIsDisplayed()
+  }
+
+  @Test
   fun missingTalkProviderShowsPersistentSetupMessageWithoutStartingCapture() {
     val permission = Manifest.permission.RECORD_AUDIO
     val permissionWasGranted = app.checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED
