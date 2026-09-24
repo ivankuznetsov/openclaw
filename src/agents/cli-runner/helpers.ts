@@ -103,6 +103,10 @@ export function buildCliAgentSystemPrompt(params: {
   workspaceDir: string;
   cwd?: string;
   config?: OpenClawConfig;
+  preparedModelRuntime?: Parameters<
+    typeof buildConfiguredAgentSystemPrompt
+  >[0]["preparedModelRuntime"];
+  preparedGitCoauthorPrompt?: string;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requireExplicitMessageTarget?: boolean;
@@ -134,6 +138,7 @@ export function buildCliAgentSystemPrompt(params: {
     agentId: params.agentId,
     workspaceDir: runtimeCwd,
     cwd: runtimeCwd,
+    preparedGitCoauthorPrompt: params.preparedGitCoauthorPrompt,
     runtime: {
       sessionKey: params.sessionKey,
       sessionId: params.sessionId,
@@ -151,6 +156,7 @@ export function buildCliAgentSystemPrompt(params: {
   });
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
+    preparedModelRuntime: params.preparedModelRuntime,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     runtimeCwd,
@@ -169,6 +175,7 @@ export function buildCliAgentSystemPrompt(params: {
     }),
     runtimeInfo,
     toolNames: params.tools.map((tool) => tool.name),
+    messageTool: params.tools.find((tool) => tool.name.trim().toLowerCase() === "message"),
     skillsPrompt: params.skillsPrompt,
     userTimezone,
     userDate,

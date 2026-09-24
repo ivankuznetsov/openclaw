@@ -44,6 +44,16 @@ describe("model compat catalog ownership migration", () => {
     const raw = {
       models: {
         providers: {
+          anthropic: {
+            api: "anthropic-messages",
+            baseUrl: "https://api.anthropic.com/v1",
+            models: [
+              {
+                id: "claude-haiku-4-5",
+                compat: { codeMode: "capable", supportsTemperature: true },
+              },
+            ],
+          },
           openai: {
             api: "openai-responses",
             baseUrl: "https://api.openai.com/v1",
@@ -72,8 +82,10 @@ describe("model compat catalog ownership migration", () => {
     ]);
     migration?.apply(raw, changes);
 
+    expect(raw.models.providers.anthropic.models[0]?.compat).toEqual({ supportsTemperature: true });
     expect(raw.models.providers.openai.models[0]?.compat).toEqual({ supportsTemperature: true });
     expect(changes).toEqual([
+      "Removed models.providers.anthropic.models.0.compat catalog/dead overrides: codeMode.",
       "Removed models.providers.openai.models.0.compat catalog/dead overrides: nativeWebSearchTool, requiresMistralToolIds, supportsReasoningEffort.",
     ]);
     expect(rules.map((rule) => rule.match?.(raw.models.providers, raw))).toEqual([
@@ -87,6 +99,11 @@ describe("model compat catalog ownership migration", () => {
     const raw = {
       models: {
         providers: {
+          anthropic: {
+            api: "anthropic-messages",
+            baseUrl: "http://127.0.0.1:9200/v1",
+            models: [{ id: "claude-haiku-4-5", compat: { codeMode: "capable" } }],
+          },
           custom: {
             api: "openai-completions",
             baseUrl: "http://127.0.0.1:9000/v1",
@@ -104,6 +121,7 @@ describe("model compat catalog ownership migration", () => {
 
     migration?.apply(raw, changes);
 
+    expect(raw.models.providers.anthropic.models[0]?.compat).toEqual({ codeMode: "capable" });
     expect(raw.models.providers.custom.models[0]?.compat).toEqual({ supportsTools: false });
     expect(raw.models.providers.openai.models[0]?.compat).toEqual({
       supportsReasoningEffort: true,
@@ -151,8 +169,8 @@ describe("explicit model allow policy migration", () => {
           agentId,
         });
         expect(policy.allowAny).toBe(false);
-        expect(policy.allowsKey(`${agentId}/bare`)).toBe(true);
-        expect(policy.allowsKey("unrelated/denied")).toBe(false);
+        expect(policy.allows({ provider: agentId, model: "bare" })).toBe(true);
+        expect(policy.allows({ provider: "unrelated", model: "denied" })).toBe(false);
       }
     },
   );

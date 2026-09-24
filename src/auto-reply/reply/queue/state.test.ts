@@ -156,7 +156,7 @@ describe("refreshQueuedFollowupSession", () => {
     });
   });
 
-  it("clamps queued Sol Ultra work to Codex Luna Max", () => {
+  it("preserves queued Sol Ultra work when switching to Codex Luna", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({
       prompt: "queued message",
@@ -184,12 +184,12 @@ describe("refreshQueuedFollowupSession", () => {
     expect(queue.items[0]?.run).toMatchObject({
       provider: "openai",
       model: "gpt-5.6-luna",
-      thinkLevel: "max",
+      thinkLevel: "ultra",
       thinkingCatalog: [{ provider: "openai", id: "gpt-5.6-luna", name: "Luna", reasoning: true }],
     });
   });
 
-  it("uses the highest supported non-max level when retargeting queued work", () => {
+  it("preserves harness-only Ultra when retargeting queued work", () => {
     const queue = getFollowupQueue(QUEUE_KEY, { mode: "followup" });
     queue.items.push({
       prompt: "queued message",
@@ -205,7 +205,7 @@ describe("refreshQueuedFollowupSession", () => {
       nextThinking: { level: "ultra", agentRuntime: "openclaw" },
     });
 
-    expect(queue.items[0]?.run.thinkLevel).toBe("high");
+    expect(queue.items[0]?.run.thinkLevel).toBe("ultra");
   });
 
   it.each([
@@ -223,7 +223,7 @@ describe("refreshQueuedFollowupSession", () => {
       stored: "high",
       model: "gpt-5.6-sol",
       reasoning: true,
-      expected: "off",
+      expected: "low",
     },
     {
       source: "default",
@@ -247,7 +247,7 @@ describe("refreshQueuedFollowupSession", () => {
       stored: "off",
       model: "gpt-5.6-luna",
       reasoning: true,
-      expected: "max",
+      expected: "ultra",
     },
     {
       source: "turn",
@@ -300,7 +300,7 @@ describe("refreshQueuedFollowupSession", () => {
 
   it.each([
     { requested: "high", stored: "low", expected: ["high", "off", "high"] },
-    { requested: "off", stored: "high", expected: ["off", "off", "off"] },
+    { requested: "off", stored: "high", expected: ["low", "off", "low"] },
     { requested: "default", stored: "off", expected: ["high", "off", "low"] },
     { requested: undefined, stored: "low", expected: ["low", "off", "low"] },
   ] as const)(
@@ -349,6 +349,22 @@ describe("refreshQueuedFollowupSession", () => {
             entries: { main: { thinkingDefault: "low" } },
             defaults: {
               thinkingDefault: "off",
+              models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
+            },
+          },
+        },
+        expected: "low",
+      },
+      {
+        name: "agent model",
+        config: {
+          agents: {
+            entries: {
+              main: {
+                models: { "openai/gpt-5.6-sol": { params: { thinking: "low" } } },
+              },
+            },
+            defaults: {
               models: { "openai/gpt-5.6-sol": { params: { thinking: "high" } } },
             },
           },

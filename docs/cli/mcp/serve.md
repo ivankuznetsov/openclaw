@@ -73,7 +73,7 @@ Use [`openclaw acp`](/cli/acp) instead when OpenClaw should host the coding runt
 </Tabs>
 
 <Note>
-Today, `auto` behaves the same as `on`. There is no client capability detection yet.
+`auto` behaves the same as `on`. There is no client capability detection.
 </Note>
 
 ### What serve exposes
@@ -135,7 +135,7 @@ This gives MCP clients one place to:
     Reads recent transcript messages for one session-backed conversation. `limit` defaults to 20, max 200.
   </Accordion>
   <Accordion title="attachments_fetch">
-    Extracts non-text message content blocks and canonical persisted media metadata from one transcript message. Persisted entries use `{ "type": "openclaw_media", "media": { ... } }`, where `media` can include `url`, `contentType`, `kind`, `fileName`, dimensions, duration, or size. This is a metadata view, not a standalone durable attachment blob store.
+    Extracts non-text message content blocks and canonical persisted media metadata from one transcript message. Looks up `message_id` directly through the Gateway, so the message does not need to appear in the recent history window. Persisted entries use `{ "type": "openclaw_media", "media": { ... } }`, where `media` can include `url`, `contentType`, `kind`, `fileName`, dimensions, duration, or size. This is a metadata view, not a standalone durable attachment blob store.
   </Accordion>
   <Accordion title="events_poll">
     Reads queued live events since a numeric cursor. `limit` max 200. If the requested cursor predates retained queue history, the result also includes `gap.requested_after_cursor` and `gap.oldest_available_cursor`.
@@ -327,12 +327,10 @@ For broader testing context, see [Testing](/help/testing).
 
 ## Current limits
 
-This page documents the bridge as shipped today.
-
-Current limits:
+The bridge has these limits:
 
 - conversation discovery depends on existing Gateway session route metadata
 - no generic push protocol beyond the Claude-specific adapter
-- no message edit or react tools yet
-- HTTP/SSE/streamable-http transport connects to a single remote server; no multiplexed upstream yet
+- no message edit or react tools
+- HTTP/SSE/streamable-http transport connects to a single remote server; upstreams are not multiplexed
 - `permissions_list_open` only includes approvals observed while the bridge is connected
