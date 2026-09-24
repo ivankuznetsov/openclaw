@@ -7,145 +7,112 @@ import {
 } from "./pw-tools-core.test-harness.js";
 
 installPwToolsCoreTestHooks();
-const {
-  clickCoordsViaPlaywright,
-  dragCoordsViaPlaywright,
-  scrollCoordsViaPlaywright,
-  typeViaPlaywright,
-} = await import("./pw-tools-core.interactions.actions.js");
+const actions = await import("./pw-tools-core.interactions.actions.js");
+const { waitForViaPlaywright } = await import("./pw-tools-core.interactions.content.js");
+const { resizeViewportViaPlaywright } = await import("./pw-tools-core.snapshot.js");
 
-describe("human input authority", () => {
-  it.each(["page", "move"])("fences scrolling revoked during %s", async (stage) => {
-    let current = true;
-    const mouse = {
-      move: vi.fn(async () => {
-        current = false;
-      }),
-      wheel: vi.fn(),
-    };
-    const page = { url: () => "https://example.test", mouse };
-    setPwToolsCoreCurrentPage(page);
-    if (stage === "page") {
-      getPwToolsCoreSessionMocks().getPageForTargetId.mockImplementationOnce(async () => {
-        current = false;
-        return page;
+describe("resident interaction authority", () => {
+  it.each(["click", "type", "fill", "wait", "resize"] as const)(
+    "starts each %s effect in the same turn as its final assertion",
+    async (kind) => {
+      const events: string[] = [];
+      const effect = vi.fn(async () => {
+        expect(events.at(-1)).toBe("assert");
+        events.push("effect");
       });
-    }
-    await expect(
-      scrollCoordsViaPlaywright({
-        cdpUrl: "http://localhost:18792",
+      setPwToolsCoreCurrentRefLocator({ click: effect, fill: effect, press: effect });
+      setPwToolsCoreCurrentPage({
+        setViewportSize: effect,
+        evaluateHandle: async () => {
+          await effect();
+          return { dispose: async () => {} };
+        },
+        waitForFunction: effect,
+      });
+      const opts = {
+        cdpUrl: "http://127.0.0.1:18792",
         targetId: "T1",
-        x: 1,
-        y: 2,
-        deltaX: 0,
-        deltaY: 200,
         assertCurrent: () => {
-          if (!current) {
-            throw new Error("requester revoked");
-          }
+          events.push("assert");
+          queueMicrotask(() => events.push("yield"));
         },
-      }),
-    ).rejects.toThrow("requester revoked");
-    expect(mouse.move).toHaveBeenCalledTimes(stage === "page" ? 0 : 1);
-    expect(mouse.wheel).not.toHaveBeenCalled();
-  });
-
-  it("inserts chunks, preserves default fill, and rechecks authority after page resolution", async () => {
-    const fill = vi.fn();
-    const insertText = vi.fn();
-    const page = { url: () => "https://example.test", keyboard: { insertText } };
-    setPwToolsCoreCurrentPage(page);
-    setPwToolsCoreCurrentRefLocator({ fill });
-    const options = { cdpUrl: "http://localhost:18792", targetId: "T1", ref: "1" };
-    for (const text of ["a", "b"]) {
-      await typeViaPlaywright({ ...options, text, insertText: true });
-    }
-    expect(insertText.mock.calls).toEqual([["a"], ["b"]]);
-    expect(fill).not.toHaveBeenCalled();
-    await typeViaPlaywright({ ...options, text: "replacement" });
-    expect(fill).toHaveBeenCalledWith("replacement", expect.any(Object));
-
-    let current = true;
-    getPwToolsCoreSessionMocks().getPageForTargetId.mockImplementationOnce(async () => {
-      current = false;
-      return page;
-    });
-    await expect(
-      typeViaPlaywright({
-        ...options,
-        text: "c",
-        insertText: true,
-        assertCurrent: () => {
-          if (!current) {
-            throw new Error("requester revoked");
-          }
-        },
-      }),
-    ).rejects.toThrow("requester revoked");
-    expect(insertText).toHaveBeenCalledTimes(2);
-    expect(fill).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(["move", "down"])(
-    "stops a drag revoked during %s and releases a pressed button",
-    async (stage) => {
-      const controller = new AbortController();
-      const mouse = {
-        move: vi.fn(async () => {
-          if (stage === "move") {
-            controller.abort(new Error("revoked"));
-          }
-        }),
-        down: vi.fn(async () => {
-          if (stage === "down") {
-            controller.abort(new Error("revoked"));
-          }
-        }),
-        up: vi.fn(async () => {}),
       };
-      setPwToolsCoreCurrentPage({ url: () => "https://example.test", mouse });
-      await expect(
-        dragCoordsViaPlaywright({
-          cdpUrl: "http://localhost:18792",
-          targetId: "T1",
-          x: 1,
-          y: 2,
-          endX: 3,
-          endY: 4,
-          signal: controller.signal,
-        }),
-      ).rejects.toThrow("revoked");
-      // Foreground rejection may precede the primitive's cleanup continuation.
-      await new Promise((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(mouse.move).toHaveBeenCalledTimes(1);
-      expect(mouse.down).toHaveBeenCalledTimes(stage === "down" ? 1 : 0);
-      expect(mouse.up).toHaveBeenCalledTimes(stage === "down" ? 1 : 0);
+      switch (kind) {
+        case "click":
+          await actions.clickViaPlaywright({ ...opts, ref: "1" });
+          break;
+        case "type":
+          await actions.typeViaPlaywright({ ...opts, ref: "1", text: "review", submit: true });
+          break;
+        case "fill":
+          await actions.fillFormViaPlaywright({
+            ...opts,
+            fields: [
+              { ref: "1", type: "text", value: "first" },
+              { ref: "2", type: "text", value: "second" },
+            ],
+          });
+          break;
+        case "wait":
+          await waitForViaPlaywright({ ...opts, fn: "() => true" });
+          break;
+        case "resize":
+          await resizeViewportViaPlaywright({ ...opts, width: 800, height: 600 });
+          break;
+      }
+      expect(effect).toHaveBeenCalledTimes(kind === "click" || kind === "resize" ? 1 : 2);
     },
   );
 
-  it("rechecks live authority after awaited page resolution before clicking", async () => {
-    let current = true;
+  it("still awaits an asynchronous authority and preserves its rejection", async () => {
+    const entered = Promise.withResolvers<void>();
+    const admission = Promise.withResolvers<void>();
     const click = vi.fn(async () => {});
-    const page = { url: () => "https://example.test", mouse: { click } };
-    setPwToolsCoreCurrentPage(page);
-    getPwToolsCoreSessionMocks().getPageForTargetId.mockImplementationOnce(async () => {
-      current = false;
-      return page;
-    });
-    const options = {
-      cdpUrl: "http://localhost:18792",
+    setPwToolsCoreCurrentPage({});
+    setPwToolsCoreCurrentRefLocator({ click });
+    const pending = actions.clickViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
       targetId: "T1",
-      x: 1,
-      y: 2,
+      ref: "1",
       assertCurrent: () => {
-        if (!current) {
-          throw new Error("requester revoked");
-        }
+        entered.resolve();
+        return admission.promise;
       },
-    };
-    await expect(clickCoordsViaPlaywright(options)).rejects.toThrow("requester revoked");
+    });
+    const rejected = expect(pending).rejects.toThrow("actor revoked");
+    await entered.promise;
     expect(click).not.toHaveBeenCalled();
+    admission.reject(new Error("actor revoked"));
+    await rejected;
+    expect(click).not.toHaveBeenCalled();
+  });
+
+  it("rechecks resize authority after clearing the previous metrics owner", async () => {
+    let current = true;
+    const send = vi.fn(async () => {
+      current = false;
+    });
+    const setViewportSize = vi.fn(async () => {});
+    setPwToolsCoreCurrentPage({ setViewportSize });
+    Object.assign(getPwToolsCoreSessionMocks().ensurePageState(), {
+      emulation: {
+        metricsOwner: { viewport: { width: 400, height: 300 }, session: { send } },
+      },
+    });
+    await expect(
+      resizeViewportViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        width: 800,
+        height: 600,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("actor revoked");
+          }
+        },
+      }),
+    ).rejects.toThrow("actor revoked");
+    expect(send).toHaveBeenCalledWith("Emulation.clearDeviceMetricsOverride");
+    expect(setViewportSize).not.toHaveBeenCalled();
   });
 });

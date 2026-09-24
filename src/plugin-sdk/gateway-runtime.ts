@@ -36,12 +36,17 @@ export { ensureGatewayStartupAuth } from "../gateway/startup-auth.js";
 export { resolveGatewayAuth } from "../gateway/auth.js";
 
 export { GatewayClient } from "../gateway/client.js";
-export { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
+export { startGatewayClientWhenEventLoopReady } from "../../packages/gateway-client/src/readiness.js";
 // Compatibility for @tencent-connect/openclaw-qqbot@2.0.3. Remove after the pinned
 // package migrates its approval handler to the dedicated approval runtime SDK.
 export { createOperatorApprovalsGatewayClient } from "../gateway/operator-approvals-client.js";
 
 export { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
+export type {
+  HumanInterventionControlRequest,
+  HumanInterventionState,
+  HumanInterventionView,
+} from "../../packages/gateway-protocol/src/browser-handoff.js";
 
 export type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 

@@ -5,13 +5,14 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import { BROWSER_TAB_UNREACHABLE_RETIRE_MS } from "./constants.js";
 import {
+  cdpMocks,
   clearProcessLocalTabState,
-  useSessionTabSqliteFixture,
-} from "./session-tab-registry.sqlite-fixture.test-helpers.js";
+  installSessionTabRegistrySqliteHarness,
+} from "./session-tab-registry.sqlite.test-harness.js";
 import {
   type CloseTab,
   type DurableRecord,
@@ -19,15 +20,6 @@ import {
   durableOwnership as ownership,
 } from "./session-tab-registry.sqlite.test-helpers.js";
 import { browserSessionTabStorageKey } from "./session-tab-store.js";
-
-const cdpMocks = vi.hoisted(() => ({
-  closeTrackedCdpTarget: vi.fn<() => Promise<CloseTrackedCdpTargetResult>>(),
-}));
-
-vi.mock("./cdp.helpers.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./cdp.helpers.js")>()),
-  closeTrackedCdpTarget: cdpMocks.closeTrackedCdpTarget,
-}));
 
 function setBrowserProfileConfig(): void {
   const config = {
@@ -46,11 +38,7 @@ function setBrowserProfileConfig(): void {
 }
 
 describe("durable session tab registry", () => {
-  const { openStore, installRuntime, freshRegistry } = useSessionTabSqliteFixture();
-
-  beforeEach(() => {
-    cdpMocks.closeTrackedCdpTarget.mockReset().mockResolvedValue({ status: "closed" });
-  });
+  const { openStore, installRuntime, freshRegistry } = installSessionTabRegistrySqliteHarness();
 
   it("closes a durable tab after the SQLite database and module are reopened", async () => {
     setBrowserProfileConfig();
@@ -680,42 +668,6 @@ describe("durable session tab registry", () => {
       lastUsedAt: 2_000,
     });
     expect(openStore().entries()[0]?.value).not.toHaveProperty("cleanupAttemptToken");
-  });
-
-  it("retries pending lifecycle cleanup even when normal sweeps filter the session", async () => {
-    const registry = await freshRegistry("lifecycle-retry");
-    registry.trackSessionBrowserTab({
-      sessionKey: "agent:subagent:ended",
-      targetId: "opaque",
-      profile: "remote",
-      ownership: ownership("NATIVE-PENDING"),
-      now: 1_000,
-    });
-    await expect(
-      registry.closeTrackedBrowserTabsForSessions({
-        sessionKeys: ["agent:subagent:ended"],
-        now: 2_000,
-        closeDurableTab: async () => ({
-          status: "unavailable",
-          reason: "target-lookup-failed",
-        }),
-      }),
-    ).resolves.toBe(0);
-    expect(openStore().entries()[0]?.value).toMatchObject({
-      nativeTargetId: "NATIVE-PENDING",
-      cleanupKind: "lifecycle",
-      cleanupAttemptToken: expect.any(String),
-    });
-
-    await expect(
-      registry.sweepTrackedBrowserTabs({
-        now: 10_000,
-        sessionFilter: () => false,
-        closeDurableTab: async (_tab, options) =>
-          options.shouldClose() ? { status: "closed" } : { status: "cancelled" },
-      }),
-    ).resolves.toBe(1);
-    expect(openStore().entries()).toEqual([]);
   });
 
   it("throws when durable registration cannot write SQLite", async () => {

@@ -8,11 +8,19 @@ import {
   getProcessStartTime,
   isPidAlive,
   isPidDefinitelyDead,
+  readDarwinProcessIdentity,
 } from "./pid-alive.js";
 
 const readWindowsProcessStartTimeSyncMock = vi.hoisted(() =>
   vi.fn<(pid: number) => number | null>(() => null),
 );
+const readFreeBsdProcessStartTimeMock = vi.hoisted(() =>
+  vi.fn<(pid: number) => number | null>(() => null),
+);
+
+vi.mock("./freebsd-process-identity.ts", () => ({
+  readFreeBsdProcessStartTime: readFreeBsdProcessStartTimeMock,
+}));
 
 vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/windows-process-start.js")>()),
@@ -22,6 +30,7 @@ vi.mock("../infra/windows-process-start.js", async (importOriginal) => ({
 afterEach(() => {
   vi.restoreAllMocks();
   readWindowsProcessStartTimeSyncMock.mockReset();
+  readFreeBsdProcessStartTimeMock.mockReset();
 });
 
 function mockProcReads(entries: Record<string, string>) {
@@ -229,7 +238,7 @@ describe("process start times", () => {
     });
   });
 
-  it.each(["darwin", "linux", "win32"] as const)(
+  it.each(["darwin", "linux", "win32", "freebsd"] as const)(
     "retries failed self probes and keeps foreign %s identities fresh",
     async (platform) => {
       const identity = platform === "linux" ? 0 : 1_752_000_000;
@@ -241,6 +250,7 @@ describe("process start times", () => {
         .mockReturnValueOnce(111)
         .mockReturnValueOnce(222);
       readWindowsProcessStartTimeSyncMock.mockImplementation(probe);
+      readFreeBsdProcessStartTimeMock.mockImplementation(probe);
       vi.spyOn(childProcess, "execFileSync").mockImplementation((_file, args) => {
         const value = probe(Number(args?.[3]));
         if (value === null) {
@@ -285,7 +295,7 @@ describe("process start times", () => {
   });
 
   it("returns null on unsupported platforms", () => {
-    return withMockedPlatform("freebsd", async () => {
+    return withMockedPlatform("aix", async () => {
       expect(getProcessStartTime(process.pid)).toBeNull();
       expect(getFileLockProcessStartTime(process.pid)).toBeNull();
     });
@@ -298,5 +308,41 @@ describe("process start times", () => {
     expect(getProcessStartTime(Number.NaN)).toBeNull();
     expect(getProcessStartTime(Number.POSITIVE_INFINITY)).toBeNull();
     expect(getFileLockProcessStartTime(0)).toBeNull();
+  });
+});
+
+describe("Darwin combined process identity", () => {
+  it("reads only the requested PID with the existing epoch-seconds birth contract", () => {
+    const read = vi
+      .spyOn(childProcess, "execFileSync")
+      .mockReturnValue("   42     1 Thu Sep 24 00:00:00 2026\n");
+    withMockedPlatform("darwin", () => {
+      expect(readDarwinProcessIdentity(42)).toEqual({
+        parentPid: 1,
+        startedAt: Date.UTC(2026, 8, 24) / 1000,
+      });
+    });
+    expect(read).toHaveBeenCalledExactlyOnceWith(
+      "/bin/ps",
+      ["-o", "pid=,ppid=,lstart=", "-p", "42"],
+      expect.objectContaining({ timeout: 1000, maxBuffer: 4096, killSignal: "SIGKILL" }),
+    );
+  });
+
+  it.each([
+    "",
+    "42 1 Thu Sep 24 00:00:00 2026",
+    "43 1 Thu Sep 24 00:00:00 2026\n",
+    "42 -1 Thu Sep 24 00:00:00 2026\n",
+    "42 1 Thu Sep 24 00:00:00 2026\n\n",
+    "42 1 Thu Sep 24 00:00:00 2026\n43 1 Thu Sep 24 00:00:00 2026\n",
+    "42 1 Thu Feb 31 00:00:00 2026\n",
+    "42 1 Fri Sep 24 00:00:00 2026\n",
+    "42 1 unavailable\n",
+  ])("does not adopt incomplete or inconsistent metadata: %j", (stdout) => {
+    vi.spyOn(childProcess, "execFileSync").mockReturnValue(stdout);
+    withMockedPlatform("darwin", () => {
+      expect(readDarwinProcessIdentity(42)).toBeNull();
+    });
   });
 });

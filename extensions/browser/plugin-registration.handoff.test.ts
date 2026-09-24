@@ -10,7 +10,10 @@ const mocks = vi.hoisted(() => ({
   createBrowserTool: vi.fn(),
   cancel: vi.fn(async () => undefined),
 }));
-vi.mock("./register.runtime.js", () => ({ createBrowserTool: mocks.createBrowserTool }));
+vi.mock("./register.runtime.js", () => ({
+  createBrowserTool: mocks.createBrowserTool,
+  hasBrowserNodeHostWork: () => false,
+}));
 vi.mock("./src/browser/session-tab-store.js", () => ({
   initializeBrowserSessionTabStore: vi.fn(),
 }));

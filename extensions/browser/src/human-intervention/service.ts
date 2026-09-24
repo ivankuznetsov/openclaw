@@ -1,9 +1,9 @@
 import { createHash, randomBytes } from "node:crypto";
+import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import type {
   HumanInterventionControlRequest,
   HumanInterventionState,
-} from "@openclaw/gateway-protocol";
-import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
+} from "openclaw/plugin-sdk/gateway-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 
 const DEFAULT_PENDING_TTL_MS = 30 * 60 * 1000;

@@ -6,17 +6,17 @@ export async function readHumanBrowserInputFocus(
   page: Page,
   authority: Pick<GuardedInteractionOptions, "signal" | "assertCurrent">,
 ): Promise<boolean> {
-  const assertCurrent = () => {
+  const assertCurrent = async () => {
     authority.signal?.throwIfAborted();
-    authority.assertCurrent?.();
+    await authority.assertCurrent?.();
   };
-  assertCurrent();
+  await assertCurrent();
   // Follow the active iframe chain, not OS window focus: a managed tab may be in
   // the background while its focused field still receives remote keyboard input.
   let frame = page.mainFrame();
   let remaining = 64;
   while (remaining-- > 0) {
-    assertCurrent();
+    await assertCurrent();
     const editable = await frame
       .evaluate(() => {
         let element = document.activeElement;
@@ -42,7 +42,7 @@ export async function readHumanBrowserInputFocus(
         return element.isContentEditable;
       })
       .catch(() => false);
-    assertCurrent();
+    await assertCurrent();
     if (editable) {
       return true;
     }
@@ -51,9 +51,9 @@ export async function readHumanBrowserInputFocus(
       if (remaining-- <= 0) {
         return false;
       }
-      assertCurrent();
+      await assertCurrent();
       const handle = await child.frameElement().catch(() => null);
-      assertCurrent();
+      await assertCurrent();
       if (!handle) {
         continue;
       }
@@ -68,11 +68,11 @@ export async function readHumanBrowserInputFocus(
             return active === element;
           })
           .catch(() => false);
-        assertCurrent();
+        await assertCurrent();
       } finally {
         await handle.dispose();
       }
-      assertCurrent();
+      await assertCurrent();
       if (focused) {
         focusedChild = child;
         break;

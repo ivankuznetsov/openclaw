@@ -307,16 +307,16 @@ describe("human browser intervention panel", () => {
   );
 
   it("fits the remote viewport once before opening its screencast", async () => {
-    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(
-      function (this: HTMLElement) {
-        return this.classList.contains("viewer") ? 390 : 0;
-      },
-    );
-    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(
-      function (this: HTMLElement) {
-        return this.classList.contains("viewer") ? 600 : 0;
-      },
-    );
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("viewer") ? 390 : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.classList.contains("viewer") ? 600 : 0;
+    });
     const { request, panel } = await mountReadyPanel();
     const browserCalls = request.mock.calls
       .filter(([method]) => method === "browser.handoff.browser")

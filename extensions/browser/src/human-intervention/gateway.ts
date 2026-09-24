@@ -1,9 +1,10 @@
-import type {
-  HumanInterventionControlRequest,
-  HumanInterventionView,
-} from "@openclaw/gateway-protocol";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { ErrorCodes, errorShape } from "openclaw/plugin-sdk/gateway-runtime";
+import {
+  ErrorCodes,
+  errorShape,
+  type HumanInterventionControlRequest,
+  type HumanInterventionView,
+} from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   asNullableRecord,
@@ -108,7 +109,7 @@ export function sanitizeAction(value: unknown, targetId: string): Record<string,
     if (typeof action.text !== "string" || action.text.length > 4096) {
       throw new Error("human browser text must be at most 4096 characters");
     }
-    return { kind: "type", targetId, selector: ":focus", text: action.text, insertText: true };
+    return { kind, targetId, text: action.text };
   }
   if (kind === "type") {
     return {

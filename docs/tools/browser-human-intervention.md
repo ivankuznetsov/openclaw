@@ -44,6 +44,17 @@ The chat link includes a one-use credential that expires after 10 minutes, or wh
 
 Treat the link as private: anyone who receives an unused link can redeem it. The resulting browser session can view and operate only the selected handoff until it ends or expires. It cannot access Gateway settings, chats, shell commands, or other tabs. The credential is kept in this browser tab's session storage; it is not added to the normal Gateway login store. Gateway administrators retain their existing access through the authenticated Control UI.
 
+### Why the link is a bearer credential
+
+Handoff exists for the moment you are away from the Gateway host and a page needs a human. Requiring Gateway owner sign-in before redemption would mean pairing or logging the phone in to the full Gateway first, which grants far broader authority than one tab and is usually impossible from wherever the handoff arrives. OpenClaw instead bounds what the link can do:
+
+- It is sent only in reply to the owner in a direct conversation, never in a group, and only when the feature is explicitly enabled with an HTTPS public origin.
+- It redeems once, in a visible foreground tab, and expires after at most 10 minutes. Link previews do not receive the fragment credential.
+- The redeemed session reaches only the bound tab through human input operations. It has no Gateway RPC, settings, chat, shell, file, cookie, or other-tab access.
+- Selecting **Done** or **Cancel handoff**, lease expiry, or handoff expiry revokes it, and an administrator can cancel it at any time.
+
+The remaining risk is that someone who obtains an unused link within its lifetime can operate that tab, including any website session already signed in there. If that happens, your own attempt to open the link shows it as invalid or expired; cancel the handoff from the authenticated Control UI. Keep the feature disabled on Gateways whose owner chats may be forwarded or read by others.
+
 ## Use it
 
 When the agent encounters a CAPTCHA, login/2FA, or another step only you can complete in a managed browser tab, it should request a handoff immediately. You do not need to ask for a link first. This is an agent tool decision based on the visible page, not a background CAPTCHA detector. OpenClaw:

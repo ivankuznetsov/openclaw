@@ -74,7 +74,9 @@ export function registerBrowserAgentScreencastRoutes(
         const lifecycle = getProfileLifecycle(runtime);
         const generation = lifecycle.generation;
         const configRevision = lifecycle.configRevision;
+        const assertResourceCurrent = req.screencastAuthority?.assertCurrent;
         const assertCurrent = () => {
+          assertResourceCurrent?.();
           if (
             state.profiles.get(profileName) !== runtime ||
             !isProfileGenerationCurrent({ state, runtime, generation, configRevision })
@@ -88,37 +90,49 @@ export function registerBrowserAgentScreencastRoutes(
         if (requesterGone()) {
           return;
         }
-        const requesterSignal =
-          req.requester?.signal && handoffAuthoritySignal
-            ? AbortSignal.any([req.requester.signal, handoffAuthoritySignal])
-            : (req.requester?.signal ?? handoffAuthoritySignal);
-        const { token, expiresAtMs } = mintBrowserScreencastToken({
-          profileName,
-          targetId: tab.targetId,
-          cdpUrl,
-          ssrfPolicy: state.resolved.ssrfPolicy,
-          maxWidth: clampScreencastOption(body.maxWidth, 320, 2000, 1280),
-          maxHeight: clampScreencastOption(body.maxHeight, 320, 2000, 1280),
-          quality: clampScreencastOption(body.quality, 30, 90, 70),
-          lifecycleGeneration: generation,
-          lifecycleSignal: lifecycle.controller.signal,
-          requesterSignal,
-          isRequesterCurrent: requesterIsCurrent,
-          assertCurrent,
-          checkNavigationAllowed: async (nextUrl) => {
-            await assertBrowserNavigationResultAllowed({
-              url: nextUrl,
-              ...browserNavigationPolicyForProfile(ctx, profileCtx),
-            });
-          },
-        });
-        res.json({
-          token,
-          wsPath: `/browser/screencast?token=${token}`,
-          expiresAtMs,
-          targetId: tab.targetId,
-          url,
-        });
+        const retainedRequester = req.screencastAuthority?.retainRequester();
+        const baseRequesterSignal = retainedRequester?.signal ?? req.requester?.signal;
+        const baseIsRequesterCurrent = retainedRequester?.isCurrent ?? req.requester?.isCurrent;
+        try {
+          const { token, expiresAtMs } = mintBrowserScreencastToken({
+            profileName,
+            targetId: tab.targetId,
+            cdpUrl,
+            ssrfPolicy: state.resolved.ssrfPolicy,
+            maxWidth: clampScreencastOption(body.maxWidth, 320, 2000, 1280),
+            maxHeight: clampScreencastOption(body.maxHeight, 320, 2000, 1280),
+            quality: clampScreencastOption(body.quality, 30, 90, 70),
+            lifecycleGeneration: generation,
+            lifecycleSignal: req.screencastAuthority
+              ? AbortSignal.any([lifecycle.controller.signal, req.screencastAuthority.signal])
+              : lifecycle.controller.signal,
+            requesterSignal:
+              baseRequesterSignal && handoffAuthoritySignal
+                ? AbortSignal.any([baseRequesterSignal, handoffAuthoritySignal])
+                : (baseRequesterSignal ?? handoffAuthoritySignal),
+            isRequesterCurrent: handoffAuthoritySignal
+              ? () => baseIsRequesterCurrent?.() !== false && !handoffAuthoritySignal.aborted
+              : baseIsRequesterCurrent,
+            releaseRequester: retainedRequester?.release,
+            assertCurrent,
+            checkNavigationAllowed: async (nextUrl) => {
+              await assertBrowserNavigationResultAllowed({
+                url: nextUrl,
+                ...browserNavigationPolicyForProfile(ctx, profileCtx),
+              });
+            },
+          });
+          res.json({
+            token,
+            wsPath: `/browser/screencast?token=${token}`,
+            expiresAtMs,
+            targetId: tab.targetId,
+            url,
+          });
+        } catch (error) {
+          retainedRequester?.release();
+          throw error;
+        }
       },
     });
   });

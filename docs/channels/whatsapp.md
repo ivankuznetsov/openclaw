@@ -7,7 +7,9 @@ title: "WhatsApp"
 
 Status: production-ready via WhatsApp Web (Baileys). The gateway owns the linked session(s); there is no separate Twilio WhatsApp channel.
 
-## Install
+## Setup
+
+### Install
 
 `openclaw onboard` and `openclaw channels add --channel whatsapp` prompt to install the plugin the first time you select it; `openclaw channels login --channel whatsapp` offers the same install flow if the plugin is missing. Dev checkouts use the local plugin path; stable/beta installs `@openclaw/whatsapp` from npm first, then falls back to its declared ClawHub package only when the npm target is unavailable. The WhatsApp runtime ships outside the core OpenClaw npm package, so its runtime dependencies stay with the external plugin. Manual install:
 
@@ -29,7 +31,7 @@ Use `npm:@openclaw/whatsapp` or `clawhub:@openclaw/whatsapp` to force a source; 
   </Card>
 </CardGroup>
 
-## Quick setup
+### Quick setup
 
 <Steps>
   <Step title="Configure access policy">
@@ -101,7 +103,7 @@ openclaw pairing approve whatsapp <CODE>
 A separate WhatsApp number is recommended (setup and metadata are optimized for it), but personal-number/self-chat setups are fully supported.
 </Note>
 
-## Deployment patterns
+### Deployment patterns
 
 ### Human browser handoff
 
@@ -153,7 +155,7 @@ MeowCaller is experimental, has no tagged release, and uses a separately paired 
 <Steps>
   <Step title="Enable experimental calls">
 
-    Add `actions.calls: true` to the WhatsApp channel config and restart the gateway:
+    Add `actions.calls: true` to the WhatsApp channel config. Changes follow [hot reload](/gateway/configuration/hot-reload):
 
 ```json
 {
@@ -183,7 +185,7 @@ mkdir -p "$HOME/.local/bin"
 go build -o "$HOME/.local/bin/meowcaller" ./cmd/meowcaller
 ```
 
-    Ensure `$HOME/.local/bin` is on the gateway service's `PATH`. This revision has explicit `pair` and send-only `notify` commands; `notify` opens no microphone, speaker, video device, or diagnostic capture. Do not substitute the upstream example CLI's `play` command.
+    Ensure `$HOME/.local/bin` is on the gateway service's `PATH`; restart the Gateway if you changed its service environment. This revision has explicit `pair` and send-only `notify` commands; `notify` opens no microphone, speaker, video device, or diagnostic capture. Do not substitute the upstream example CLI's `play` command.
 
   </Step>
 
@@ -204,7 +206,7 @@ meowcaller pair --store "$state_dir/wa-voip.db"
 
   <Step title="Configure TTS and call from WhatsApp">
 
-    Configure a telephony-capable [TTS provider](/tools/tts), restart the gateway, then send a request such as `Call me and say the build finished.` The tool resolves the sender from trusted inbound context, synthesizes a temporary private WAV file, runs MeowCaller for a bounded call window, and deletes the audio file afterward. OpenClaw passes the account's store explicitly, waits for a zero exit status after answer/playback/hangup, and treats a timeout or nonzero exit as a failed tool call.
+    Configure a telephony-capable [TTS provider](/tools/tts), then send a request such as `Call me and say the build finished.` The tool resolves the sender from trusted inbound context, synthesizes a temporary private WAV file, runs MeowCaller for a bounded call window, and deletes the audio file afterward. OpenClaw passes the account's store explicitly, waits for a zero exit status after answer/playback/hangup, and treats a timeout or nonzero exit as a failed tool call.
 
   </Step>
 </Steps>
@@ -257,7 +259,9 @@ Inbound WhatsApp messages can carry personal content, phone numbers, group ident
 
 Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHooks.messageReceived`. Only enable this for plugins you trust with inbound WhatsApp content and identifiers.
 
-## Access control and activation
+## Access control
+
+### Access control and activation
 
 <Tabs>
   <Tab title="DM policy">
@@ -318,7 +322,7 @@ Scope the opt-in to one account under `channels.whatsapp.accounts.<id>.pluginHoo
   </Tab>
 </Tabs>
 
-## Configured ACP bindings
+### Configured ACP bindings
 
 WhatsApp supports persistent ACP bindings via top-level `bindings[]`:
 
@@ -349,7 +353,7 @@ WhatsApp supports persistent ACP bindings via top-level `bindings[]`:
 
 Direct chats match E.164 numbers; groups match WhatsApp group JIDs. Group allowlists, sender policy, and mention/activation gating run before OpenClaw ensures the bound ACP session exists. A matched binding owns the route — broadcast groups do not fan that turn out to ordinary WhatsApp sessions.
 
-## Personal-number and self-chat behavior
+### Personal-number and self-chat behavior
 
 `channels.whatsapp.selfChatMode` controls same-number DM admission and self-chat safeguards. Set it at the channel level or override it per account with `channels.whatsapp.accounts.<id>.selfChatMode`.
 
@@ -362,7 +366,9 @@ Self-chat safeguards are enabled by `true` and disabled by `false`. When the set
 
 A liveness probe sent to your own number can therefore become agent input with `selfChatMode` unset or `true`. Set `selfChatMode: false` if you want to exclude those self-originated DMs.
 
-## Message normalization and context
+## Messaging and delivery
+
+### Message normalization and context
 
 <AccordionGroup>
   <Accordion title="Inbound envelope and reply context">
@@ -410,7 +416,7 @@ A liveness probe sent to your own number can therefore become agent input with `
   </Accordion>
 </AccordionGroup>
 
-## Delivery, chunking, and media
+### Delivery, chunking, and media
 
 <AccordionGroup>
   <Accordion title="Text chunking">
@@ -442,7 +448,7 @@ A liveness probe sent to your own number can therefore become agent input with `
   </Accordion>
 </AccordionGroup>
 
-## Reply quoting
+### Reply quoting
 
 `channels.whatsapp.replyToMode` controls native reply quoting (outbound replies visibly quote the inbound message):
 
@@ -461,7 +467,9 @@ Per-account override: `channels.whatsapp.accounts.<id>.replyToMode`.
 { channels: { whatsapp: { replyToMode: "first" } } }
 ```
 
-## Reaction level
+## Reactions and typing
+
+### Reaction level
 
 `channels.whatsapp.reactionLevel` controls how broadly the agent uses emoji reactions:
 
@@ -478,7 +486,7 @@ Per-account override: `channels.whatsapp.accounts.<id>.reactionLevel`.
 { channels: { whatsapp: { reactionLevel: "ack" } } }
 ```
 
-## Acknowledgment reactions
+### Acknowledgment reactions
 
 `messages.ackReaction` sends an immediate reaction on inbound receipt, gated by the active WhatsApp account's `reactionLevel` (suppressed when `"off"`). `messages.ackReactionScope` selects direct messages, groups, or both:
 
@@ -493,7 +501,7 @@ Per-account override: `channels.whatsapp.accounts.<id>.reactionLevel`.
 
 Notes: the reaction is sent immediately after inbound is accepted (pre-reply); omit `messages.ackReaction` or set it to `""` for no acknowledgment. Failures are logged but do not block reply delivery. The default scope is `"group-mentions"`; use `"all"` for direct messages and all eligible groups. In a group whose activation is `always`, `"group-mentions"` acks every message rather than only mention-triggered turns, because activation stands in for the mention check.
 
-## Lifecycle status reactions
+### Lifecycle status reactions
 
 Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack reaction during a turn instead of leaving a static receipt emoji, cycling through states such as queued, thinking, tool activity, compaction, done, and error:
 
@@ -509,7 +517,7 @@ Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack rea
 
 Notes: `messages.ackReactionScope` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain acknowledgment reactions. WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place and restore the acknowledgment after the final done/error state.
 
-## Active-turn typing
+### Active-turn typing
 
 For admitted automatic turns where typing is allowed, WhatsApp sends a
 `composing` presence update when agent execution begins and refreshes it while
@@ -714,5 +722,6 @@ Primary reference: [Configuration reference - WhatsApp](/gateway/config-channels
 - [Groups](/channels/groups)
 - [Security](/gateway/security)
 - [Channel routing](/channels/channel-routing)
+- [Reactions](/tools/reactions)
 - [Multi-agent routing](/concepts/multi-agent)
 - [Troubleshooting](/channels/troubleshooting)

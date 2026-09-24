@@ -1,4 +1,4 @@
-import type { HumanInterventionControlRequest } from "@openclaw/gateway-protocol";
+import type { HumanInterventionControlRequest } from "openclaw/plugin-sdk/gateway-runtime";
 import type {
   OpenClawPluginApi,
   OpenClawPluginToolContext,

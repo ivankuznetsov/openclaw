@@ -263,7 +263,7 @@ describe("human intervention gateway", () => {
     },
     {
       action: { kind: "insertText", text: "hello", targetId: "other", selector: "#other" },
-      expected: { kind: "type", text: "hello", selector: ":focus", insertText: true },
+      expected: { kind: "insertText", text: "hello" },
     },
   ])(
     "allows $action.kind only on the handoff-bound tab and authority lease",

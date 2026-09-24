@@ -23,6 +23,40 @@ describe("normalizeActRequest pixel scrolling", () => {
   });
 });
 
+it("projects nested actions without leaking caller control fields or dropping false and empty values", () => {
+  expect(
+    normalizeActRequest({
+      kind: "batch",
+      targetId: 123,
+      stopOnError: false,
+      signal: "caller-signal",
+      actions: [
+        {
+          kind: "click",
+          ref: " e1 ",
+          doubleClick: false,
+          delayMs: 0,
+          resolvedPage: { targetId: "other-page" },
+          assertCurrent: "caller-authority",
+        },
+        { kind: "type", selector: " input ", text: "", submit: false, slowly: false },
+        { kind: "select", ref: "e2", values: ["", " spaced "] },
+        { kind: "close", timeoutMs: "ignored-for-close" },
+      ],
+    }),
+  ).toStrictEqual({
+    kind: "batch",
+    targetId: "123",
+    stopOnError: false,
+    actions: [
+      { kind: "click", ref: "e1", doubleClick: false, delayMs: 0 },
+      { kind: "type", selector: "input", text: "", submit: false, slowly: false },
+      { kind: "select", ref: "e2", values: ["", " spaced "] },
+      { kind: "close" },
+    ],
+  });
+});
+
 describe("canonicalizeActTargetIds", () => {
   const canonical = "abcd1234";
   const tab = { targetId: canonical, suggestedTargetId: "sg-1", tabId: "tab-7", label: "Inbox" };
@@ -84,11 +118,23 @@ describe("canonicalizeActTargetIds", () => {
 });
 
 describe("normalizeActRequest keyboard keys", () => {
-  it("preserves explicit caret insertion without changing default fill mode", () => {
-    const input = { kind: "type", selector: ":focus", text: "a" };
-    expect(normalizeActRequest(input)).not.toHaveProperty("insertText");
-    expect(normalizeActRequest({ ...input, insertText: true })).toMatchObject({ insertText: true });
+  it.each(["  pasted 🦞\nsecond line  ", "", "\t\n"])(
+    "preserves focused text insertion without an element ref: %j",
+    (text) => {
+      expect(normalizeActRequest({ kind: "insertText", text, targetId: "tab-1" })).toEqual({
+        kind: "insertText",
+        text,
+        targetId: "tab-1",
+      });
+    },
+  );
+
+  it("rejects non-text insertion payloads without echoing content", () => {
+    expect(() =>
+      normalizeActRequest({ kind: "insertText", text: { secret: "synthetic" } }),
+    ).toThrow("insertText requires text");
   });
+
   it.each([
     ["Esc", "Escape"],
     ["ESC", "Escape"],
@@ -98,6 +144,10 @@ describe("normalizeActRequest keyboard keys", () => {
     ["Cmd+A", "Meta+A"],
     ["Ctrl+Shift+Esc", "Control+Shift+Escape"],
     ["Ctrl++", "Control++"],
+    [" ", "Space"],
+    ["Space", "Space"],
+    ["space", "Space"],
+    ["Ctrl+Space", "Control+Space"],
   ])("normalizes the keyboard alias %s", (key, expected) => {
     expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key: expected });
   });
@@ -108,6 +158,18 @@ describe("normalizeActRequest keyboard keys", () => {
       expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key });
     },
   );
+
+  it.each([
+    [" + ", "+"],
+    ["+ ", "+"],
+  ])("keeps trim-first Plus-key handling for %j", (key, expected) => {
+    expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key: expected });
+  });
+
+  it("still rejects an empty press key after trimming", () => {
+    expect(() => normalizeActRequest({ kind: "press", key: "" })).toThrow("press requires key");
+    expect(() => normalizeActRequest({ kind: "press", key: "\t" })).toThrow("press requires key");
+  });
 
   it("normalizes keyboard aliases inside nested batch actions", () => {
     expect(

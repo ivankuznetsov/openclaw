@@ -15,6 +15,7 @@ const ACT_KINDS = [
   "evaluate",
   "fill",
   "hover",
+  "insertText",
   "scrollIntoView",
   "press",
   "resize",

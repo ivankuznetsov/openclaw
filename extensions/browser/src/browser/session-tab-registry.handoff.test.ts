@@ -6,11 +6,11 @@ import {
   HumanInterventionService,
   type HumanInterventionRecord,
 } from "../human-intervention/service.js";
-import { useSessionTabSqliteFixture } from "./session-tab-registry.sqlite-fixture.test-helpers.js";
+import { installSessionTabRegistrySqliteHarness } from "./session-tab-registry.sqlite.test-harness.js";
 import { durableOwnership as ownership } from "./session-tab-registry.sqlite.test-helpers.js";
 
 describe("handoff protection during session tab cleanup", () => {
-  const { openStore, freshRegistry } = useSessionTabSqliteFixture();
+  const { openStore, freshRegistry } = installSessionTabRegistrySqliteHarness();
 
   function createCleanupCoordinator() {
     const service = new HumanInterventionService(
