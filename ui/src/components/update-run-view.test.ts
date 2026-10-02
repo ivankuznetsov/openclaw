@@ -182,6 +182,44 @@ describe("update run view", () => {
     await vi.waitFor(() => expect(element.textContent).toContain("Prompt copied"));
   });
 
+  it("preserves installed and requested identities before early-failure diagnostics", async () => {
+    const secret = `gho_${"A".repeat(20)}`;
+    const installedSha = "a1".repeat(20);
+    const requestedSha = "b2".repeat(20);
+    const element = await mount(
+      run({
+        phase: "finished",
+        status: "failed",
+        reason: "database-schema-preflight",
+        before: { version: "2026.9.1", sha: installedSha },
+        target: {
+          kind: "git",
+          version: "2026.9.2",
+          sha: requestedSha,
+          tag: `stable token=${secret}`,
+        },
+        after: {},
+        verification: {},
+        steps: [
+          {
+            step: "database-schema-preflight",
+            status: "failed",
+            detail: "Candidate database schema is incompatible.",
+          },
+        ],
+      }),
+    );
+
+    element.querySelector<HTMLButtonElement>(".update-run-view__copy-prompt")?.click();
+    await vi.waitFor(() => expect(copyToClipboard).toHaveBeenCalledOnce());
+    const prompt = vi.mocked(copyToClipboard).mock.calls[0]?.[0] ?? "";
+    expect(prompt).toContain(`Installed: version: 2026.9.1; SHA: ${installedSha}`);
+    expect(prompt).toContain(`Requested target: version: 2026.9.2; SHA: ${requestedSha}`);
+    expect(prompt).toContain("tag: stable token=[redacted]");
+    expect(prompt).not.toContain(secret);
+    expect(prompt.indexOf("Requested target:")).toBeLessThan(prompt.indexOf("Failed:"));
+  });
+
   it("offers the repair prompt only for reportable failed outcomes", async () => {
     const element = await mount(run({ phase: "finished", status: "succeeded" }));
     expect(element.querySelector(".update-run-view__copy-prompt")).toBeNull();

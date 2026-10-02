@@ -56,8 +56,33 @@ function repairPrompt(run: UpdateRunRecord): string {
     // SAFETY: the update record is JSON data; the replacer changes only string values.
   ) as UpdateRunRecord;
   const report = renderUpdateRunReport(safeRun);
-  const facts = clampText(redactRepairFact(`Run ID: ${run.runId}\n${report.markdown}`), 1_800);
+  const facts = clampText(
+    redactRepairFact(
+      [
+        `Run ID: ${safeRun.runId}`,
+        `Installed: ${formatUpdateIdentity([
+          ["version", safeRun.before.version],
+          ["SHA", safeRun.before.sha],
+        ])}`,
+        `Requested target: ${formatUpdateIdentity([
+          ["version", safeRun.target.version],
+          ["SHA", safeRun.target.sha],
+          ["tag", safeRun.target.tag],
+        ])}`,
+        report.markdown,
+      ].join("\n"),
+    ),
+    1_800,
+  );
   return t("updates.run.repairPrompt", { facts });
+}
+
+function formatUpdateIdentity(fields: Array<[string, string | null | undefined]>): string {
+  return (
+    fields
+      .flatMap(([label, value]) => (value ? [`${label}: ${clampText(value, 120)}`] : []))
+      .join("; ") || "unknown"
+  );
 }
 
 function redactRepairFact(value: string): string {
@@ -246,7 +271,7 @@ ${view.details || t(view.detailStep === "updater-runtime-retention" ? "updates.r
                       <button
                         class="btn btn--sm update-run-view__copy-prompt"
                         type="button"
-                        @click=${this.copyRepairPrompt}
+                        @click=${(event: Event) => this.copyRepairPrompt(event)}
                       >
                         ${t("updates.run.copyAgentPrompt")}
                       </button>
