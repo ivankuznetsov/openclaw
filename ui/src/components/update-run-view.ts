@@ -53,6 +53,7 @@ function repairPrompt(run: UpdateRunRecord): string {
     JSON.stringify(run, (_key, value) =>
       typeof value === "string" ? redactRepairFact(value) : value,
     ),
+    // SAFETY: the update record is JSON data; the replacer changes only string values.
   ) as UpdateRunRecord;
   const report = renderUpdateRunReport(safeRun);
   const facts = clampText(redactRepairFact(`Run ID: ${run.runId}\n${report.markdown}`), 1_800);
