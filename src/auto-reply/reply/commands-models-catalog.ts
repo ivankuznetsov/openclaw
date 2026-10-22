@@ -34,7 +34,12 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveProviderChannelLoginChoice } from "../../plugins/provider-login-options.js";
 import { resolveModelRuntimeRoute } from "../../shared/model-runtime-route.js";
 import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
-import { buildModelsMenu, type ModelReadiness, type ModelsMenu } from "./commands-models-menu.js";
+import {
+  buildModelsMenu,
+  type ModelProviderLogin,
+  type ModelReadiness,
+  type ModelsMenu,
+} from "./commands-models-menu.js";
 import {
   normalizeRuntimeChoiceId,
   resolveRuntimeNormalization,
@@ -374,16 +379,26 @@ export async function loadModelsProviderData(
   }
 
   const providers = [...byProvider.keys()].toSorted();
-  const loginProviders = new Set(
-    providers.filter(
-      (provider) =>
-        resolveProviderChannelLoginChoice(provider, {
-          config: cfg,
-          workspaceDir,
-          metadataSnapshot: owner.metadataSnapshot,
-        }).status !== "unsupported",
-    ),
-  );
+  const loginProviders = new Set<string>();
+  const providerLogins = new Map<string, ModelProviderLogin>();
+  for (const provider of providers) {
+    const resolution = resolveProviderChannelLoginChoice(provider, {
+      config: cfg,
+      workspaceDir,
+      metadataSnapshot: owner.metadataSnapshot,
+    });
+    if (resolution.status === "unsupported") {
+      continue;
+    }
+    loginProviders.add(provider);
+    if (resolution.status === "resolved") {
+      providerLogins.set(provider, {
+        methodId: resolution.choice.methodId,
+        label: resolution.choice.label,
+        mode: resolution.choice.mode,
+      });
+    }
+  }
 
   const modelNames = new Map<string, string>();
   for (const entry of [...catalog, ...visibleCatalog]) {
@@ -452,6 +467,7 @@ export async function loadModelsProviderData(
       modelNames,
       modelAvailability,
       loginProviders,
+      providerLogins,
       pendingProviders,
     }),
     refreshWarning: snapshot.refreshFailed

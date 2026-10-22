@@ -166,6 +166,16 @@ it("preserves authentication guidance for provider HTTP 401 failures", () => {
   expectRequest(message, null, "provider_authentication_error", 401);
 });
 
+it("names the provider sign-in step for HTTP 401 failures", () => {
+  const message = "unexpected status 401 Unauthorized: Invalid API key";
+  const copy = classifyReplyRequest({ message, status: 401, provider: "meta" });
+  expect(copy).toMatchObject({
+    code: "provider_authentication_error",
+    userMessage: expect.stringContaining("/login meta"),
+  });
+  expect(copy?.userMessage).toContain("switch to a working model with /model");
+});
+
 it("preserves provider-internal guidance", () => {
   expectRequest(
     "server_error: An error occurred while processing your request. Please include the request ID req_123.",

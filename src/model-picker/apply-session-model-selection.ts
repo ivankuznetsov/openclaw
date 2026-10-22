@@ -17,6 +17,11 @@ import {
   type StickyModelSelectionDispatchOutcome,
 } from "../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../agents/thinking-runtime.js";
+import {
+  resolveModelSelectionAuthBlock,
+  type ModelSelectionAuthBlock,
+  type ModelsMenu,
+} from "../auto-reply/reply/commands-models-menu.js";
 import { applyModelRuntimeDirective } from "../auto-reply/reply/directive-handling.model-runtime.js";
 import {
   prepareModelSelectionRuntime,
@@ -78,6 +83,15 @@ export type ApplySessionModelSelectionParams = {
   canPersistStickyModelSelection?: boolean;
   stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
   validateAuthProfileSelection?: () => string | undefined;
+  /**
+   * Supplying the picker's menu facts opts in to the shared auth-readiness
+   * policy: a selection whose provider has no working sign-in is rejected
+   * (reason "auth") before persistence, with the recovery block for the
+   * adapter to render. Adapters pass the menu they rendered; absence never
+   * blocks. Typed commands and session patches do not pass facts and keep
+   * current behavior. Default selections are never gated.
+   */
+  authReadinessMenu?: ModelsMenu;
   request: SessionModelSelectionRequest;
   /** Raw directive text used only by the existing session patch hook. */
   patchModel?: string;
@@ -113,6 +127,13 @@ export type ApplySessionModelSelectionResult =
       status: "rejected";
       reason: "locked" | "not-allowed" | "invalid-runtime" | "unknown-provider";
       message: string;
+    }
+  | {
+      status: "rejected";
+      reason: "auth";
+      message: string;
+      /** Sign-in recovery; adapters render it with their own buttons. */
+      authBlock: ModelSelectionAuthBlock;
     }
   | { status: "conflict"; message: string };
 
@@ -195,6 +216,21 @@ export async function applySessionModelSelectionInternal(
   };
   if (!resetToDefault && !policy.allows(request)) {
     return rejectNotAllowed(request.provider, request.model);
+  }
+
+  if (!resetToDefault && !request.isDefault && params.authReadinessMenu) {
+    // Shared picker policy (adapters opt in by passing menu facts): never
+    // persist a selection whose provider has no working sign-in, judged on
+    // the menu data the picker was rendered from.
+    const authBlock = resolveModelSelectionAuthBlock({
+      menu: params.authReadinessMenu,
+      provider: request.provider,
+      model: request.model,
+      agentId: params.agentId,
+    });
+    if (authBlock) {
+      return { status: "rejected", reason: "auth", message: authBlock.notice, authBlock };
+    }
   }
 
   const prepared = await prepareModelSelectionRuntime({

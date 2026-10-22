@@ -39,6 +39,7 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
         message: rawError,
       }),
       status,
+      provider: described.provider,
     }),
   };
 }
