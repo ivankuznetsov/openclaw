@@ -511,6 +511,9 @@ export async function preparePublishedModelRuntimeChoice(params: {
   );
   const entryVariants = variants.length ? variants : [entry];
   const choices = decisions.runtimeChoices(entry, entryVariants);
+  // runtimeChoices only contains runtimes that evaluated available, so a
+  // stored preference that is still available always wins; one that is not
+  // falls through to the first available choice on re-selection.
   const runtimeId =
     params.runtimeId ??
     (params.preferredRuntimeId && choices?.includes(params.preferredRuntimeId)
