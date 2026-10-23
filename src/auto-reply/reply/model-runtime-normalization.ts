@@ -154,10 +154,9 @@ export async function prepareModelSelectionRuntime(params: {
       sessionEntry,
     });
     // Discover a claiming CLI/native runtime even when the session carries a
-    // stored override: otherwise a runtime pinned before sign-in (for example
-    // openclaw while unauthenticated) suppresses the signed-in alternative
-    // forever. Preference between the two is resolved by auth availability in
-    // the runtime-choice preparation below.
+    // stored override, so runtime-choice preparation can validate the stored
+    // preference against current availability. The stored override is passed
+    // as a pin below: it never silently switches to the discovered runtime.
     inheritedCliRuntime = resolveCliRuntimeExecutionProvider({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -208,14 +207,18 @@ export async function prepareModelSelectionRuntime(params: {
   if (needsRuntimeChoice) {
     const { preparePublishedModelRuntimeChoice } =
       await import("../../agents/model-runtime-choice.js");
+    const sessionRuntimePin =
+      runtime.kind === "unchanged"
+        ? normalizeOptionalAgentRuntimeId(sessionEntry?.agentRuntimeOverride)
+        : undefined;
     const choice = await preparePublishedModelRuntimeChoice({
       ...params,
       sessionEntry,
       runtimeId: runtime.kind === "set" ? runtime.runtime : undefined,
-      preferredRuntimeId:
-        (runtime.kind === "unchanged"
-          ? normalizeOptionalAgentRuntimeId(sessionEntry?.agentRuntimeOverride)
-          : undefined) ?? inheritedCliRuntime,
+      pinnedRuntimeId: sessionRuntimePin,
+      // Mirrors the pin for callers that only read a preference; the pinned
+      // field above is what forbids falling through to another runtime.
+      preferredRuntimeId: sessionRuntimePin ?? inheritedCliRuntime,
     });
     if (choice.kind === "unavailable") {
       return { status: "rejected", reason: "invalid-runtime", message: choice.message };

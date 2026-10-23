@@ -535,7 +535,7 @@ it("validates off-catalog host routes without granting an incompatible runtime",
   expect(choice.validate()).toContain("not available");
 });
 
-it("does not let a stored openclaw preference pinned while signed out beat a signed-in native runtime", async () => {
+it("does not silently switch from a stored openclaw preference pinned while signed out to a signed-in native runtime", async () => {
   const apiEntry: ModelCatalogEntry = {
     provider: "fixture",
     id: "model",
@@ -565,7 +565,10 @@ it("does not let a stored openclaw preference pinned while signed out beat a sig
     // may still list the API row first for the same model.
     modelCatalog: { entries: [nativeEntry], routeVariants: [apiEntry, nativeEntry] },
   });
-  // The API route has no credential; only the native (subscription) route is signed in.
+  // The API route has no credential; only the native (subscription) route is
+  // signed in. The stored openclaw preference is still the user's chosen
+  // runtime, so selection must fail with sign-in guidance for that runtime
+  // instead of silently switching to the native one.
   bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
   published.owner = owner;
   const selection = await prepareModelSelectionRuntime({
@@ -575,9 +578,11 @@ it("does not let a stored openclaw preference pinned while signed out beat a sig
     sessionEntry: { agentRuntimeOverride: "openclaw" },
     thinkingPolicyRequired: false,
   });
-  expect(selection).toMatchObject({
-    status: "ready",
-    runtime: { kind: "set", runtime: "native-test" },
+  expect(selection).toEqual({
+    status: "rejected",
+    reason: "invalid-runtime",
+    message:
+      'Runtime "openclaw" is not available for fixture/model: sign-in needed. Connect its provider account, or choose another model.',
   });
 });
 
