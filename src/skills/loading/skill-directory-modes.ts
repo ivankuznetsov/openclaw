@@ -1,29 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
-import { root } from "@openclaw/fs-safe/root";
+import type { Root } from "@openclaw/fs-safe/root";
 import { openRootFileSync } from "../../infra/boundary-file-read.js";
 
 export async function ensureWritableSkillDirectories(
-  skillsDir: string,
+  boundary: Root,
   relativePath: string,
+  assertCurrent?: () => void,
+  sourceMode?: number,
 ): Promise<void> {
   if (process.platform === "win32") {
     return;
   }
-  const fixedRoot = path.join(
-    await fs.promises.realpath(path.dirname(skillsDir)),
-    path.basename(skillsDir),
-  );
-  const boundary = await root(fixedRoot);
-  if (boundary.rootReal !== fixedRoot) {
-    throw new Error("Skill directory root must not be a symbolic link");
-  }
-  const visit = async (relativeDir: string): Promise<void> => {
+  const fixedRoot = boundary.rootReal;
+  const visit = async (relativeDir: string, initialMode?: number): Promise<void> => {
     const scopedPath = `.${path.sep}${relativeDir}`;
-    const stat = await boundary.stat(scopedPath);
-    if (stat.isSymbolicLink || !stat.isDirectory) {
-      return;
-    }
     const opened = openRootFileSync({
       absolutePath: path.join(fixedRoot, relativeDir),
       rootPath: fixedRoot,
@@ -37,17 +28,25 @@ export async function ensureWritableSkillDirectories(
     }
     try {
       // Sealed release copies (including legacy sandboxes) need writable directories, not files.
-      if ((opened.stat.mode & 0o700) !== 0o700) {
-        fs.fchmodSync(opened.fd, opened.stat.mode | 0o700);
+      const writableMode = (initialMode ?? opened.stat.mode) | 0o700;
+      if (opened.stat.mode !== writableMode) {
+        assertCurrent?.();
+        fs.fchmodSync(opened.fd, writableMode);
       }
     } finally {
       fs.closeSync(opened.fd);
     }
-    for (const child of await boundary.list(scopedPath, { withFileTypes: true })) {
+    // Copying owns this directory's children; only legacy cleanup walks the tree.
+    if (initialMode !== undefined) {
+      return;
+    }
+    const children = await boundary.list(scopedPath, { withFileTypes: true });
+    assertCurrent?.();
+    for (const child of children) {
       if (child.isDirectory && !child.isSymbolicLink) {
         await visit(path.join(relativeDir, child.name));
       }
     }
   };
-  await visit(relativePath);
+  await visit(relativePath, sourceMode);
 }

@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SpeechModelOverridePolicy } from "./provider-types.js";
+import { createSpeechPolicy } from "./speech-provider.test-support.js";
 import { summarizeText } from "./tts-core.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 
@@ -12,16 +13,7 @@ vi.mock("../agents/simple-completion-runtime.js", async (importOriginal) => ({
   completeWithPreparedSimpleCompletionModel,
 }));
 
-const modelOverridePolicy: SpeechModelOverridePolicy = {
-  enabled: false,
-  allowText: false,
-  allowProvider: false,
-  allowVoice: false,
-  allowModelId: false,
-  allowVoiceSettings: false,
-  allowNormalization: false,
-  allowSeed: false,
-};
+const modelOverridePolicy: SpeechModelOverridePolicy = createSpeechPolicy(false);
 
 const ttsConfig = {
   auto: "inbound",
@@ -52,10 +44,10 @@ describe("TTS summary model in a multi-agent setup", () => {
     const cfg = {
       agents: {
         defaults: { model: { primary: "openai/gpt-5.4-mini" } },
-        list: [
-          { id: "main", model: "anthropic/claude-sonnet-4-5" },
-          { id: "work", model: "anthropic/claude-opus-4-1" },
-        ],
+        entries: {
+          main: { model: "anthropic/claude-sonnet-4-5" },
+          work: { model: "anthropic/claude-opus-4-1" },
+        },
       },
     } as OpenClawConfig;
 
