@@ -1,5 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core";
-import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
+import {
+  isDefaultAgentRuntimeId,
+  normalizeOptionalAgentRuntimeId,
+} from "../../agents/agent-runtime-id.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
@@ -206,7 +209,7 @@ export async function prepareModelSelectionRuntime(params: {
   if (needsRuntimeChoice) {
     const { preparePublishedModelRuntimeChoice } =
       await import("../../agents/model-runtime-choice.js");
-    const sessionRuntimePin =
+    const storedRuntime =
       runtime.kind === "unchanged"
         ? normalizeOptionalAgentRuntimeId(sessionEntry?.agentRuntimeOverride)
         : undefined;
@@ -214,10 +217,10 @@ export async function prepareModelSelectionRuntime(params: {
       ...params,
       sessionEntry,
       runtimeId: runtime.kind === "set" ? runtime.runtime : undefined,
-      pinnedRuntimeId: sessionRuntimePin,
-      // Mirrors the pin for callers that only read a preference; the pinned
-      // field above is what forbids falling through to another runtime.
-      preferredRuntimeId: sessionRuntimePin ?? inheritedCliRuntime,
+      // Stored "auto"/"default" rows mean "no preference" and stay unpinned.
+      pinnedRuntimeId: isDefaultAgentRuntimeId(storedRuntime) ? undefined : storedRuntime,
+      // The pinned field is what forbids falling through to another runtime.
+      preferredRuntimeId: storedRuntime ?? inheritedCliRuntime,
     });
     if (choice.kind === "unavailable") {
       return { status: "rejected", reason: "invalid-runtime", message: choice.message };

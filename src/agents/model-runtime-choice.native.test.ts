@@ -575,6 +575,77 @@ it("does not silently switch from a stored openclaw preference pinned while sign
   });
 });
 
+// Session rows written by earlier releases can carry the "no preference" runtime
+// values, unnormalized spellings, legacy aliases, or no runtime at all. Re-selection
+// must read each one with the meaning it had when it was stored.
+it.each([
+  { stored: undefined, expected: "native-test" },
+  { stored: "auto", expected: "native-test" },
+  { stored: "default", expected: "native-test" },
+  { stored: " Auto ", expected: "native-test" },
+  { stored: "pi", expected: "rejected" },
+  { stored: "OpenClaw", expected: "rejected" },
+] as const)(
+  "reads a stored runtime override $stored from an existing session row",
+  async ({ stored, expected }) => {
+    const apiEntry: ModelCatalogEntry = {
+      provider: "fixture",
+      id: "model",
+      name: "Model",
+      reasoning: false,
+      api: "openai-completions",
+      baseUrl: "https://custom.invalid/v1",
+    };
+    const nativeEntry: ModelCatalogEntry = { ...apiEntry, nativeRuntime: "native-test" };
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "native-test",
+      source: "fixture",
+      harness: {
+        id: "native-test",
+        label: "Native test",
+        authBootstrap: "harness",
+        executionEnvironment: "host-only",
+        supports: () => ({ supported: true }),
+        readModelCatalogReadiness: () => ({ accountType: "oauth", authMode: "oauth" }),
+        runAttempt: vi.fn(),
+      },
+    });
+    const owner = createModelRuntimeChoiceOwnerFixture({}, () => true, {
+      pluginRegistry: registry,
+      modelCatalog: { entries: [nativeEntry], routeVariants: [apiEntry, nativeEntry] },
+    });
+    // Only the native route is signed in.
+    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+    published.owner = owner;
+    const storedRow: SessionEntry = {
+      sessionId: "stored-session",
+      updatedAt: 0,
+      providerOverride: "fixture",
+      modelOverride: "model",
+      ...(stored !== undefined ? { agentRuntimeOverride: stored } : {}),
+    };
+    const selection = await prepareModelSelectionRuntime({
+      ...request,
+      cfg: {},
+      catalog: [apiEntry, nativeEntry],
+      sessionEntry: storedRow,
+      thinkingPolicyRequired: false,
+    });
+    if (expected === "rejected") {
+      expect(selection).toMatchObject({
+        status: "rejected",
+        message: expect.stringContaining('Runtime "openclaw" is not available'),
+      });
+    } else {
+      expect(selection).toMatchObject({
+        status: "ready",
+        runtime: { kind: "set", runtime: expected },
+      });
+    }
+  },
+);
+
 it("keeps a stored openclaw preference when its route is still signed in", async () => {
   const apiEntry: ModelCatalogEntry = {
     provider: "fixture",
