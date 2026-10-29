@@ -26,6 +26,7 @@ import { applyModelRuntimeDirective } from "../auto-reply/reply/directive-handli
 import {
   prepareModelSelectionRuntime,
   findSelectedCatalogEntry,
+  isProviderAuthOwnedByRequiredWorker,
 } from "../auto-reply/reply/model-runtime-normalization.js";
 import { resolveContextTokens } from "../auto-reply/reply/model-selection-context.js";
 import { refreshQueuedFollowupSession } from "../auto-reply/reply/queue.js";
@@ -218,10 +219,20 @@ export async function applySessionModelSelectionInternal(
     return rejectNotAllowed(request.provider, request.model);
   }
 
-  if (!resetToDefault && !request.isDefault && params.authReadinessMenu) {
+  if (
+    !resetToDefault &&
+    !request.isDefault &&
+    params.authReadinessMenu &&
+    !isProviderAuthOwnedByRequiredWorker({
+      cfg: params.cfg,
+      authProfileOverride: request.profileOverride ?? startingEntry.authProfileOverride,
+    })
+  ) {
     // Shared picker policy (adapters opt in by passing menu facts): never
     // persist a selection whose provider has no working sign-in, judged on
-    // the menu data the picker was rendered from.
+    // the menu data the picker was rendered from. Menu readiness describes
+    // Gateway credentials, so it cannot judge required worker-local inference;
+    // runtime preparation below keeps owning that case.
     const authBlock = resolveModelSelectionAuthBlock({
       menu: params.authReadinessMenu,
       provider: request.provider,

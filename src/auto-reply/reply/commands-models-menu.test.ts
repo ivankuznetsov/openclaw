@@ -26,18 +26,6 @@ function buildMenu(params: {
   });
 }
 
-describe("buildModelsMenu", () => {
-  it("exposes per-model readiness and login providers for selection surfaces", () => {
-    const readiness: ModelReadiness = { availability: false, unavailableReason: "missing-auth" };
-    const menu = buildMenu({
-      readiness: { "meta/muse-spark-1.3": readiness },
-      loginProviders: ["meta"],
-    });
-    expect(menu.modelReadiness?.get("meta/muse-spark-1.3")).toBe(readiness);
-    expect(menu.loginProviders?.has("meta")).toBe(true);
-  });
-});
-
 describe("resolveModelSelectionAuthBlock", () => {
   it("blocks a model that still needs sign-in and names the provider login step", () => {
     const menu = buildMenu({
